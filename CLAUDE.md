@@ -115,6 +115,19 @@ docker compose up -d qbittorrent
 
 ---
 
+## Key Settings Locations
+
+| Setting | Where to find it |
+|---|---|
+| Jellyseerr default quality profile | Settings → Services → Radarr (or Sonarr) → pencil icon → Quality Profile dropdown. Stored in `config/jellyseerr/settings.json` as `radarr[].activeProfileId` (HD-1080p = 4). Stop container before editing file directly. |
+| Radarr/Sonarr minimum custom format score | Settings → Quality Profiles → edit each profile → Minimum Custom Format Score → set to `0` |
+| Jellyfin remote bitrate limit | Dashboard → Playback → Bandwidth Limits → Remote client bitrate limit → `0` (unlimited) |
+| Jellyfin subtitle mode | Dashboard → Display → Subtitle Mode → Smart |
+| Jellyfin LAN Networks / Known Proxies | Leave blank — Docker bridge (172.18.0.1) makes all traffic look local; these settings have no effect |
+| iOS Jellyfin app streaming quality | In-app Settings → Max Streaming Bitrate → Original (prevents codec re-encoding on top of HLS remux) |
+
+---
+
 ## Common API Operations
 
 **Trigger Jellyfin library scan:**

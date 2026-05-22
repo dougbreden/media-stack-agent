@@ -708,6 +708,8 @@ First-run: set up authentication → Forms / admin / `idbeholdg`
 - Settings → **Quality**:
   - For every quality entry (720p, 1080p, 2160p, etc.) set **Max size to `0`** (unlimited)
   - Default caps block large releases silently — 0 means no limit
+- Settings → **Quality Profiles** → edit each profile:
+  - Set **Minimum Custom Format Score** to `0` — this causes any release scoring below 0 (i.e. all Non-English releases) to be permanently rejected. Without this, the Non-English custom format scores count but nothing is actually blocked.
 - Settings → **Connect** → + → **Emby / Jellyfin** (listed as "MediaBrowser"):
   - Host: `jellyfin`, Port: `8096`
   - API key: from Jellyfin Dashboard → API Keys → + (create one, label it "Radarr")
@@ -736,6 +738,8 @@ First-run: set up authentication → Forms / admin / `idbeholdg`
   - Test → Save
 - Settings → **Quality**:
   - For every quality entry set **Max size to `0`** (unlimited) — same reason as Radarr
+- Settings → **Quality Profiles** → edit each profile:
+  - Set **Minimum Custom Format Score** to `0` — same reason as Radarr
 - Settings → **Connect** → + → **Emby / Jellyfin** (listed as "MediaBrowser"):
   - Host: `jellyfin`, Port: `8096`
   - API key: from Jellyfin Dashboard → API Keys → + (create one, label it "Sonarr")
@@ -800,6 +804,9 @@ First-run wizard:
 
 Note: The Jellyfin container has NVIDIA GPU passthrough configured in `docker-compose.yml` via the `deploy.resources.reservations` block. This requires NVIDIA drivers with WSL2 GPU support (standard on modern NVIDIA drivers).
 
+**iOS Jellyfin app — set Max Streaming Bitrate to Original:**
+If using the Jellyfin app on iPhone (Settings gear → Max Streaming Bitrate), set it to **Original**. The default cap forces Jellyfin to transcode video to a lower bitrate even when the file could be direct-streamed unchanged. At "Original", Jellyfin remuxes the video into HLS segments without re-encoding the codec, which is much faster and preserves quality.
+
 **Set default subtitle mode** (prevents needing to manually toggle subtitles on every video):
 - Dashboard → **Display**
 - Subtitle Mode: **Smart** — subtitles appear automatically only when the audio track is in a non-preferred language (e.g. Japanese content). For English audio content, subtitles stay off.
@@ -811,6 +818,15 @@ $body = Invoke-RestMethod "http://localhost:8096/System/Configuration?api_key=f2
 $body.SubtitleMode = "Smart"
 Invoke-RestMethod -Method Post "http://localhost:8096/System/Configuration?api_key=f21e09ab3bc44eef9d50445aca69bf4e" -ContentType "application/json" -Body ($body | ConvertTo-Json -Depth 10)
 ```
+
+**Set remote bitrate limit to unlimited:**
+- Dashboard → **Playback** → scroll to **Bandwidth Limits**
+- Remote client bitrate limit: **`0`** (zero = unlimited)
+- Default is 10 Mbps — too low for high-quality HEVC encodes and causes unnecessary transcoding for remote clients even when they could direct-play
+
+**Leave LAN Networks and Known Proxies blank:**
+- Dashboard → **Networking** — do not fill in "LAN Networks" or "Known Proxies"
+- Docker's port proxy makes every connection (local WiFi and remote Tailscale alike) arrive at Jellyfin from `172.18.0.1` (the Docker bridge gateway). Jellyfin cannot distinguish local from remote traffic, so these settings have no effect and adding them only causes confusion.
 
 Note: The initial library scan after adding movies generates thumbnails and metadata for every file — this is CPU/disk intensive and will cause playback jitter until it completes. Wait for Dashboard → Scheduled Tasks to show idle before testing playback quality.
 
@@ -825,14 +841,19 @@ Note: The initial library scan after adding movies generates thumbnails and meta
   - Default server: checked
   - Hostname: `radarr`, Port: `7878`
   - API key from Radarr Settings → General
-  - Test → set Quality Profile and Root Folder `/data/movies` → Save
+  - Test → set **Quality Profile: HD-1080p**, Root Folder: `/data/movies` → Save
   - **Enable "Search Automatically"** — without this Jellyseerr adds to Radarr but never triggers a search
 - Add Sonarr:
   - Default server: checked
   - Hostname: `sonarr`, Port: `8989`
   - API key from Sonarr Settings → General
-  - Test → set Quality Profile and Root Folder `/data/tv` → Save
+  - Test → set **Quality Profile: HD-1080p**, Root Folder: `/data/tv` → Save
   - **Enable "Search Automatically"** — same reason as above
+
+**To change the default quality profile later** (without re-running setup):
+Settings → Services → Radarr → click the **pencil icon** on the server → Quality Profile dropdown → select the desired profile → Save. Repeat for Sonarr. This sets the pre-selected default when users open the request dialog — they can still override it per request.
+
+The default profile is stored in `M:\Media\config\jellyseerr\settings.json` under `radarr[].activeProfileId` and `sonarr[].activeProfileId`, matching the numeric profile IDs from Radarr/Sonarr (HD-1080p = 4 in both apps). Stop Jellyseerr before editing the file directly, then restart.
 
 ### 9. Homarr — http://localhost:7575
 
