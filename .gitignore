@@ -1,0 +1,14 @@
+# Secrets — never commit
+.env
+api-keys.md
+*.conf
+
+# Service config databases and generated files
+config/
+
+# Media files
+data/
+
+# Windows
+Thumbs.db
+desktop.ini

@@ -1,0 +1,284 @@
+networks:
+  media-network:
+    driver: bridge
+
+services:
+
+  # ─── Media Server ────────────────────────────────────────────────────────────
+  jellyfin:
+    image: lscr.io/linuxserver/jellyfin:latest
+    container_name: jellyfin
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=America/Chicago
+    volumes:
+      - M:/Media/config/jellyfin:/config
+      - M:/Media/data/movies:/data/movies
+      - M:/Media/data/tv:/data/tv
+    ports:
+      - 8096:8096
+    networks:
+      - media-network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8096/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+  # ─── Request UI ──────────────────────────────────────────────────────────────
+  jellyseerr:
+    image: fallenbagel/jellyseerr:latest
+    container_name: jellyseerr
+    environment:
+      - TZ=America/Chicago
+    volumes:
+      - M:/Media/config/jellyseerr:/app/config
+    ports:
+      - 5055:5055
+    networks:
+      - media-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5055/api/v1/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+  # ─── Indexer Manager ─────────────────────────────────────────────────────────
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: prowlarr
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=America/Chicago
+    volumes:
+      - M:/Media/config/prowlarr:/config
+    ports:
+      - 9696:9696
+    networks:
+      - media-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9696/ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+  # ─── Cloudflare Bypass (required by many indexers) ───────────────────────────
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    environment:
+      - LOG_LEVEL=info
+      - TZ=America/Chicago
+    ports:
+      - 8191:8191
+    networks:
+      - media-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8191/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  # ─── VPN Gateway (Mullvad WireGuard via Gluetun) ─────────────────────────────
+  # qBittorrent shares this container's network stack — all torrent traffic
+  # exits through Mullvad. Ports for qBittorrent are declared here, not on
+  # the qbittorrent service.
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    container_name: gluetun
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      - VPN_SERVICE_PROVIDER=mullvad
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY}
+      - WIREGUARD_ADDRESSES=${WIREGUARD_ADDRESSES}
+      - SERVER_COUNTRIES=Netherlands
+      - TZ=America/Chicago
+      - BLOCK_MALICIOUS=off
+      - BLOCK_SURVEILLANCE=off
+      - BLOCK_ADS=off
+      - DNS_UPSTREAM_RESOLVER_TYPE=plain
+      - DNS_UPSTREAM_PLAIN_ADDRESSES=1.1.1.1:53
+    ports:
+      - 8080:8080      # qBittorrent web UI
+      - 6881:6881      # torrent TCP
+      - 6881:6881/udp  # torrent UDP
+    networks:
+      - media-network
+    labels:
+      - com.centurylinklabs.watchtower.enable=false
+    restart: unless-stopped
+
+  # ─── Torrent Client ──────────────────────────────────────────────────────────
+  # No ports or networks here — shares gluetun's network stack entirely.
+  # All traffic (including web UI) routes through the VPN.
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: qbittorrent
+    network_mode: "service:gluetun"
+    depends_on:
+      - gluetun
+    labels:
+      - com.centurylinklabs.watchtower.enable=false
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=America/Chicago
+      - WEBUI_PORT=8080
+    volumes:
+      - M:/Media/config/qbittorrent:/config
+      - M:/Media/data/torrents:/data/torrents
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+  # ─── Movie Automation ─────────────────────────────────────────────────────────
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: radarr
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=America/Chicago
+    volumes:
+      - M:/Media/config/radarr:/config
+      - M:/Media/data:/data          # full /data mount — required for hardlinks
+    ports:
+      - 7878:7878
+    networks:
+      - media-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:7878/ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+  # ─── TV Automation ────────────────────────────────────────────────────────────
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=America/Chicago
+    volumes:
+      - M:/Media/config/sonarr:/config
+      - M:/Media/data:/data          # full /data mount — required for hardlinks
+    ports:
+      - 8989:8989
+    networks:
+      - media-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8989/ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+  # ─── Subtitle Manager ────────────────────────────────────────────────────────
+  bazarr:
+    image: lscr.io/linuxserver/bazarr:latest
+    container_name: bazarr
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=America/Chicago
+    volumes:
+      - M:/Media/config/bazarr:/config
+      - M:/Media/data/movies:/data/movies   # paths must match what Radarr sees
+      - M:/Media/data/tv:/data/tv           # paths must match what Sonarr sees
+    ports:
+      - 6767:6767
+    networks:
+      - media-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:6767 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+  # ─── Archive Extractor ───────────────────────────────────────────────────────
+  unpackerr:
+    image: golift/unpackerr:latest
+    container_name: unpackerr
+    environment:
+      - TZ=America/Chicago
+      - UN_RADARR_0_URL=http://radarr:7878
+      - UN_RADARR_0_API_KEY=${RADARR_API_KEY}
+      - UN_SONARR_0_URL=http://sonarr:8989
+      - UN_SONARR_0_API_KEY=${SONARR_API_KEY}
+    volumes:
+      - M:/Media/data/torrents:/data/torrents
+    networks:
+      - media-network
+    restart: unless-stopped
+
+  # ─── Auto-updater ────────────────────────────────────────────────────────────
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: watchtower
+    environment:
+      - TZ=America/Chicago
+      - WATCHTOWER_SCHEDULE=0 0 3 * * *
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_INCLUDE_STOPPED=false
+      - WATCHTOWER_NOTIFICATIONS=shoutrrr
+      - WATCHTOWER_NOTIFICATION_URL=
+      - DOCKER_API_VERSION=1.44
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - media-network
+    restart: unless-stopped
+
+  # ─── Dashboard ───────────────────────────────────────────────────────────────
+  homarr:
+    image: ghcr.io/ajnart/homarr:latest
+    container_name: homarr
+    environment:
+      - TZ=America/Chicago
+    volumes:
+      - M:/Media/config/homarr:/app/data/configs
+      - M:/Media/config/homarr/icons:/app/public/icons
+      - M:/Media/config/homarr/auth:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - 7575:7575
+    networks:
+      - media-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --tries=1 --spider \"http://$$(hostname -i):$${PORT:-7575}/\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
