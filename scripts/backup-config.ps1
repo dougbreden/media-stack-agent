@@ -41,9 +41,13 @@ Set-Location "M:\Media"
 docker compose stop
 Write-Host ""
 
-# Create the zip
+# Create the zip using 7-Zip (handles locked/restricted files that Compress-Archive cannot)
+# Exit code 1 = warnings (e.g. log files locked by running containers) — acceptable.
+# Exit code 2+ = fatal error.
 Write-Host "Creating backup zip..." -ForegroundColor Yellow
-Compress-Archive -Path $sourceDir -DestinationPath $backupFile -CompressionLevel Optimal
+$7z = "C:\Program Files\7-Zip\7z.exe"
+& $7z a -tzip -mx=5 $backupFile "$sourceDir\*" -r -xr!"logs" -xr!"ipc-socket" -xr!"*.log" | Out-Null
+if ($LASTEXITCODE -ge 2) { throw "7-Zip exited with code $LASTEXITCODE" }
 $sizeMB = [math]::Round((Get-Item $backupFile).Length / 1MB, 1)
 Write-Host "  [OK] Backup created: $backupFile ($sizeMB MB)" -ForegroundColor Green
 Write-Host ""
