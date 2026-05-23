@@ -10,7 +10,7 @@ This is a fully automated self-hosted media pipeline at `M:\Media` running 12 Do
 
 | File | Purpose |
 |---|---|
-| `M:\Media\docker-compose.yml` | All 12 container definitions — uses ${VARIABLE} references for secrets |
+| `M:\Media\docker-compose.yml` | All 13 container definitions — uses ${VARIABLE} references for secrets |
 | `M:\Media\.env` | Secrets: WireGuard key + IP, Radarr + Sonarr API keys — never commit |
 | `M:\Media\api-keys.md` | API keys for all services |
 | `M:\Media\README.md` | Full human runbook: setup steps, known issues, status log |
@@ -30,6 +30,7 @@ This is a fully automated self-hosted media pipeline at `M:\Media` running 12 Do
 | qBittorrent | http://localhost:8080 | admin / idbeholdg |
 | Homarr (dashboard) | http://localhost:7575 | admin / !GeosaT@42 |
 | Bazarr (subtitles) | http://localhost:6767 | admin / idbeholdg |
+| Tdarr (transcoder) | http://localhost:8265 | admin / idbeholdg |
 
 ---
 
@@ -130,6 +131,56 @@ docker compose up -d qbittorrent
 
 ---
 
+## Tdarr — HEVC→H264 Transcoding
+
+Tdarr runs background transcoding to convert HEVC files to H.264 for iOS direct-play. Server API is on port 8266, web UI on port 8265. Uses the same NVIDIA GPU passthrough as Jellyfin.
+
+**Library IDs:**
+- Movies: `rUP5cniqB` (path `/data/movies`)
+- TV: `nw7PJBmiV` (path `/data/tv`)
+
+**Flow ID:** `N7tOvfd6i` (name: "HEVC→H264") — stored in FlowsJSONDB collection.
+
+**Worker reads `k.inputsDB`, NOT `k.inputs`** — this is the critical non-obvious fact. Every plugin node in the flow JSON must have BOTH `inputs` and `inputsDB` fields with identical values. If `inputsDB` is missing, the worker reads plugin defaults instead (outputCodec=hevc, hardwareType=auto). This was the root bug that caused hevc_nvenc to be used instead of h264_nvenc.
+
+**Final ffmpeg command produced by the flow:**
+```
+ffmpeg -i input.mkv -map 0:0 -c:0 h264_nvenc -qp 20 -preset p4 -map 0:1 -c:1 copy -pix_fmt yuv420p output.mkv
+```
+
+**Why `hardwareDecoding: "false"`:** HEVC Main 10 sources have 10-bit pixel format (yuv420p10le / p010le). When `-hwaccel cuda` is active, the GPU decoder outputs p010le frames, which h264_nvenc rejects with "10 bit encode not supported". Setting hardwareDecoding=false removes -hwaccel cuda — the CPU decodes and converts 10-bit→8-bit, then the GPU encodes via h264_nvenc.
+
+**Why `-pix_fmt yuv420p`:** Explicitly forces 8-bit output. Without it, CPU decode of 10-bit HEVC may pass p010le to h264_nvenc even without -hwaccel. Belt-and-suspenders fix that ensures 10-bit sources always produce 8-bit H.264.
+
+**Tdarr CRUD API pattern:**
+```powershell
+# Read all staged jobs
+$r = Invoke-RestMethod -Method Post "http://localhost:8265/api/v2/cruddb" -ContentType "application/json" -Body '{"data":{"collection":"StagedJSONDB","mode":"getAll"}}'
+
+# Valid collection names: StagedJSONDB, FileJSONDB, FlowsJSONDB, StagedJSONDB
+# (NOT the library ID — that causes 400 "must be equal to one of the allowed values")
+
+# Check active worker status (shows current file + ffmpeg preset + percentage)
+Invoke-RestMethod "http://localhost:8265/api/v2/get-nodes"
+
+# Trigger fresh library scan (re-evaluates all files, including reset ones)
+$body = '{"data":{"dbID":"rUP5cniqB","mode":"scanFresh","scanConfig":{"dbID":"rUP5cniqB","mode":"scanFresh","arrayOrPath":"/data/movies"}}}'
+Invoke-RestMethod -Method Post "http://localhost:8265/api/v2/scan-files" -Body $body -ContentType "application/json"
+# Use scanFresh not scanFindNew — scanFindNew skips files with cleared TranscodeDecisionMaker
+
+# Reset files for re-processing (e.g. after flow config change)
+$body = '{"data":{"fileIds":["id1","id2"],"updatedObj":{"TranscodeDecisionMaker":"","lastTranscodeDate":0}}}'
+Invoke-RestMethod -Method Post "http://localhost:8265/api/v2/bulk-update-files" -Body $body -ContentType "application/json"
+```
+
+**TranscodeDecisionMaker values:**
+- `""` — not yet evaluated (will be picked up on next scan)
+- `"Not required"` — file was not HEVC, flow passed through without encoding
+- `"Transcode success"` — successfully re-encoded to H.264
+- `"Transcode error"` — ffmpeg failed (check job report for error; common: 10-bit encode without -pix_fmt yuv420p)
+
+---
+
 ## Common API Operations
 
 **Trigger Jellyfin library scan:**
@@ -201,3 +252,6 @@ content specifically requires Nyaa.si — SubsPlease and Erai-raws only publish 
 | Jellyseerr crash-loops with "Unexpected token '﻿'" in logs | `settings.json` was written with a UTF-8 BOM by PowerShell 5.1 `Set-Content -Encoding utf8` | Restore `settings.json` from backup zip; strip BOM with `[System.IO.File]::WriteAllBytes()`. **Never use `Set-Content -Encoding utf8` or `Out-File -Encoding utf8` on config JSON files** — always use `[System.IO.File]::WriteAllText($path, $content, [System.Text.UTF8Encoding]::new($false))` |
 | Remote/cellular playback stutters or fails to start (Infuse/Swiftfin/Jellyfin iOS) | HEVC Main 10 files require transcoding; without GPU, software transcode is too slow | GPU passthrough in docker-compose.yml (`NVIDIA_VISIBLE_DEVICES=all`). Check with `docker exec jellyfin sh -c "ls /dev/dxg"` — WSL2 uses `/dev/dxg` not `/dev/nvidia*`. Verify NVENC: `docker exec jellyfin sh -c "/usr/lib/jellyfin-ffmpeg/ffmpeg -init_hw_device cuda=gpu:0 -f lavfi -i nullsrc -frames:v 1 -c:v h264_nvenc -f null -"` |
 | Jellyfin GPU not accessible after `docker compose up` (no `/dev/nvidia*` inside container) | NVIDIA Container Runtime on WSL2 uses `/dev/dxg`, not `/dev/nvidia*`; missing `NVIDIA_VISIBLE_DEVICES` env var | Add `NVIDIA_VISIBLE_DEVICES=all` and `NVIDIA_DRIVER_CAPABILITIES=all` to jellyfin env in compose; capabilities must include `[gpu, video, compute]` |
+| Tdarr encodes with hevc_nvenc instead of h264_nvenc | Worker reads `k.inputsDB` not `k.inputs`; flow plugins only had `inputs` fields, so defaults were used | Ensure every plugin node in the flow JSON has both `inputs` AND `inputsDB` with identical values |
+| Tdarr job fails: "10 bit encode not supported" | h264_nvenc cannot encode 10-bit pixel formats; `-hwaccel cuda` decodes HEVC Main 10 to p010le which h264_nvenc rejects | Set `hardwareDecoding: "false"` in ffmpegCommandSetVideoEncoder plugin, AND add ffmpegCommandCustomArguments plugin with `outputArguments: "-pix_fmt yuv420p"` |
+| Tdarr queue empty after resetting files | Used `scanFindNew` which only processes new/changed files, not files with cleared TranscodeDecisionMaker | Use `scanFresh` mode in the scan-files API — it re-evaluates all files in the library |

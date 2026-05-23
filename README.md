@@ -38,6 +38,7 @@ docker compose up -d gluetun
 | **Prowlarr** (indexers) | http://localhost:9696 | http://100.67.113.36:9696 | admin / idbeholdg |
 | **Bazarr** (subtitles) | http://localhost:6767 | http://100.67.113.36:6767 | admin / idbeholdg |
 | **FlareSolverr** | http://localhost:8191 | — | no UI |
+| **Tdarr** (transcoder) | http://localhost:8265 | http://100.67.113.36:8265 | admin / idbeholdg |
 | **Gluetun** (VPN) | — | — | no UI |
 | **Unpackerr** | — | — | no UI |
 | **Watchtower** | — | — | no UI |
@@ -72,12 +73,13 @@ You do not need to touch Radarr, Sonarr, Prowlarr, or any other app for normal u
 | sonarr | TV automation | 8989 | http://localhost:8989 |
 | qbittorrent | Torrent client (routes through gluetun) | 8080 | http://localhost:8080 |
 | bazarr | Subtitle downloader | 6767 | http://localhost:6767 |
+| tdarr | Background transcoder — HEVC→H.264 for iOS direct play | 8265 | http://localhost:8265 |
 | unpackerr | Auto-extracts RAR/ZIP downloads | — | (no UI — background daemon) |
 | watchtower | Auto-updates all container images nightly | — | (no UI — background daemon) |
 
-**Total: 12 containers.** All have `restart: unless-stopped` — they come back automatically after crashes or reboots as long as Docker Desktop is running.
+**Total: 13 containers.** All have `restart: unless-stopped` — they come back automatically after crashes or reboots as long as Docker Desktop is running.
 
-**Images:** linuxserver.io for all except jellyseerr (fallenbagel), flaresolverr, unpackerr, and gluetun (qmcgaw).
+**Images:** linuxserver.io for all except jellyseerr (fallenbagel), flaresolverr, unpackerr, gluetun (qmcgaw), and tdarr (haveagitgat).
 Docker Desktop on Windows runs Linux containers inside a WSL2 VM — linuxserver.io images are the standard choice regardless of host OS.
 
 **VPN:** Gluetun runs Mullvad WireGuard. qBittorrent shares Gluetun's network stack via `network_mode: service:gluetun` — all torrent traffic exits through Mullvad Singapore. Mullvad removed SOCKS5 proxies, so Gluetun is the correct approach. Because qBittorrent has no independent network identity, other containers (Radarr, Sonarr) reach it via the hostname `gluetun`, not `qbittorrent`.
@@ -876,7 +878,77 @@ Homarr configuration is persisted in two places:
 
 Both are mounted as volumes, so they survive container restarts and updates.
 
-### 10. Firewall Setup (required for LAN + Tailscale access)
+### 10. Tdarr — http://localhost:8265
+
+Tdarr is a background transcoder that converts HEVC (H.265) files in the library to H.264. This makes the iOS Jellyfin app direct-play them without any server-side transcoding or HLS remux overhead. The GPU handles the encode (h264_nvenc, ~500+ fps for 1080p).
+
+**First-run setup:**
+- Navigate to http://localhost:8265 — the Tdarr server UI
+- Go to **Libraries** → Add Library:
+  - Movies: Name `Movies`, source path `/data/movies`, output path `/data/movies`
+  - TV: Name `TV`, source path `/data/tv`, output path `/data/tv`
+- For each library, set **Flow** to `HEVC→H264` (see flow setup below)
+- Enable **On Start Scan** and **Folder Watch**
+
+**Flow "HEVC→H264"** — create this flow in Tdarr → Flows → + New Flow:
+
+The flow checks if the file is HEVC, and if so transcodes it to H.264 in place (replacing the original). Non-HEVC files are passed through untouched.
+
+Node sequence:
+1. **inputFile** — entry point
+2. **checkVideoCodec** (codec: `hevc`) — routes HEVC to encode path, others to replace (no-op)
+3. **ffmpegCommandStart** — initialises ffmpeg command builder
+4. **ffmpegCommandSetVideoEncoder** — settings:
+   - Output codec: `h264`
+   - Hardware type: `nvenc`
+   - Hardware encoding: `true`
+   - Hardware decoding: **`false`** — CPU decodes (required for 10-bit sources; h264_nvenc rejects p010le frames from GPU decode)
+   - Force encoding: `true`
+   - FFmpeg preset: `fast` (maps to NVENC preset p4)
+   - FFmpeg quality: `20` (CQ mode, ~reasonable quality/size balance)
+5. **ffmpegCommandCustomArguments** — Output arguments: **`-pix_fmt yuv420p`** — forces 8-bit output (h264_nvenc cannot encode 10-bit; without this, HEVC Main 10 sources fail)
+6. **ffmpegCommandExecute** — runs the ffmpeg command
+7. **replaceOriginalFile** — replaces original with transcoded output
+
+**Critical:** Every plugin node in the flow JSON must have BOTH `inputs` AND `inputsDB` fields with identical values. The Tdarr Node worker reads `inputsDB` at runtime, not `inputs`. If `inputsDB` is missing, the worker uses plugin defaults (which default to outputCodec=hevc), and the encode silently produces HEVC with hevc_nvenc instead of H.264.
+
+**Worker configuration:**
+- Nodes → InternalNode → set `transcodegpu: 1`, `healthcheckcpu: 2`, others 0
+- Schedule: leave all hours at 0 — the workerLimits values govern (schedule overrides only when non-zero)
+
+**Checking job status:**
+```powershell
+# Check what the active GPU worker is encoding
+Invoke-RestMethod "http://localhost:8265/api/v2/get-nodes" | ConvertTo-Json -Depth 5 | Select-String "preset|file|percentage|fps"
+
+# Check queue depth
+$r = Invoke-RestMethod -Method Post "http://localhost:8265/api/v2/cruddb" -ContentType "application/json" -Body '{"data":{"collection":"StagedJSONDB","mode":"getAll"}}'
+Write-Host "Staged: $($r.array.Count)"
+```
+
+**Resetting files for re-processing** (if flow settings change):
+```powershell
+# Inside the tdarr container — reset all Transcode error files
+docker exec tdarr sh -c "curl -s -X POST http://localhost:8266/api/v2/search-db -H 'Content-Type: application/json' -d '{\"data\":{\"collection\":\"FileJSONDB\",\"mode\":\"search\",\"docID\":\"\",\"obj\":{\"TranscodeDecisionMaker\":\"Transcode error\"}}}' | python3 -c \"
+import json,sys,subprocess
+data=json.load(sys.stdin)
+ids=[d['_id'] for d in data if '_id' in d]
+print(f'Found {len(ids)} files')
+body=json.dumps({'data':{'fileIds':ids,'updatedObj':{'TranscodeDecisionMaker':'','lastTranscodeDate':0}}})
+r=subprocess.run(['curl','-s','-X','POST','http://localhost:8266/api/v2/bulk-update-files','-H','Content-Type: application/json','-d',body],capture_output=True,text=True)
+print(r.stdout[:200])
+\""
+```
+
+Then trigger a fresh scan to re-populate the queue:
+```powershell
+# Replace rUP5cniqB with your library ID (visible in Tdarr Libraries page URL)
+$body = '{"data":{"dbID":"rUP5cniqB","mode":"scanFresh","scanConfig":{"dbID":"rUP5cniqB","mode":"scanFresh","arrayOrPath":"/data/movies"}}}'
+Invoke-RestMethod -Method Post "http://localhost:8265/api/v2/scan-files" -Body $body -ContentType "application/json"
+```
+Note: use `scanFresh` (not `scanFindNew`) when resetting files — `scanFindNew` only picks up new/changed files and will not re-evaluate files whose `TranscodeDecisionMaker` was cleared.
+
+### 11. Firewall Setup (required for LAN + Tailscale access)
 
 Run the firewall setup script as Administrator. Required once after a fresh setup, and again any time Docker Desktop updates and remote access breaks.
 
@@ -891,7 +963,7 @@ This does two things:
 
 Skip this step and phones/TVs will get "could not connect" even though everything works on localhost.
 
-### 11. Language Custom Formats — Sonarr and Radarr
+### 12. Language Custom Formats — Sonarr and Radarr
 
 This is the most important part of the configuration for getting clean English content. Sonarr and Radarr v4 use a **Custom Format scoring system** instead of Language Profiles. Every candidate release gets a numeric score. Releases below the minimum threshold are permanently rejected. This section explains the full system, all the regexes, and the reasoning behind every decision.
 
@@ -1089,7 +1161,7 @@ Preferred Groups regex:
 
 **If no acceptable release exists:** the item stays "Missing" indefinitely. It will not fall back to a non-English release. This is intentional — a missing item is better than a wrongly-dubbed one.
 
-### 12. Import Existing Movie Library (optional)
+### 13. Import Existing Movie Library (optional)
 
 Copy movies into `M:\Media\data\movies\` first (Radarr can only see paths inside the container).
 Then in Radarr → Movies → **Import Existing Movies** → path `/data/movies`:
@@ -1419,3 +1491,7 @@ This creates `M:\Media\backups\config-backup-YYYY-MM-DD_HHMM.zip` (~500 MB compr
 | 2026-05-22 | iOS HLS seek lag documented | Jellyfin iOS app (WebView) always remuxes to HLS — direct play not possible on iOS. Seeking restarts FFmpeg, causing 2–4 s blank screen. Expected behavior, not a bug. |
 | 2026-05-22 | LAN Networks / Known Proxies left null | Docker bridge (172.18.0.1) makes all connections appear local to Jellyfin regardless of origin. These settings have no effect in this Docker setup and should remain unset. |
 | 2026-05-22 | Remote bitrate limit removed | Set to 0 (unlimited) via Jellyfin API. At 2.1 Mbps HEVC the previous 10 Mbps limit was harmless but misleading. |
+| 2026-05-22 | Tdarr added to stack | Container haveagitgat/tdarr on port 8265, GPU passthrough (same as Jellyfin). Libraries: movies (/data/movies) and tv (/data/tv). Flow "HEVC→H264" (id=N7tOvfd6i) created: checkVideoCodec → ffmpegCommandStart → ffmpegCommandSetVideoEncoder → ffmpegCommandCustomArguments → ffmpegCommandExecute → replaceOriginalFile. |
+| 2026-05-23 | Tdarr flow encoder bug fixed | Root bug: Tdarr Node worker reads `k.inputsDB` not `k.inputs` from the flow config. Flow had only `inputs` fields, so the worker always read plugin defaults (outputCodec=hevc). Fixed by adding matching `inputsDB` fields to all flow plugins. |
+| 2026-05-23 | Tdarr 10-bit HEVC support added | h264_nvenc cannot encode 10-bit (yuv420p10le/p010le). Fix: set hardwareDecoding=false (removes -hwaccel cuda so CPU handles 10-bit→8-bit), and added ffmpegCommandCustomArguments plugin with outputArguments="-pix_fmt yuv420p". Final ffmpeg command: h264_nvenc -qp 20 -preset p4 -pix_fmt yuv420p. |
+| 2026-05-23 | 455 incorrectly encoded files reset | 17 files encoded with hevc_nvenc (pre-inputsDB fix) and 438 "Transcode error" files (10-bit failures) reset via bulk API. Both libraries scanFresh triggered. Queue re-populating at 542 fps GPU encode rate. |
