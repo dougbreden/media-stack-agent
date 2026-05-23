@@ -79,6 +79,7 @@ $portRules = @(
     @{ Name = "Media Stack - Bazarr";       Port = 6767; Description = "Bazarr subtitle manager" }
     @{ Name = "Media Stack - FlareSolverr"; Port = 8191; Description = "FlareSolverr Cloudflare bypass" }
     @{ Name = "Media Stack - Homarr";       Port = 7575; Description = "Homarr dashboard" }
+    @{ Name = "Media Stack - Tdarr";        Port = 8265; Description = "Tdarr transcoder web UI" }
 )
 
 foreach ($rule in $portRules) {

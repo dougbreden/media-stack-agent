@@ -228,6 +228,49 @@ services:
       start_period: 30s
     restart: unless-stopped
 
+  # ─── Media Transcoder ────────────────────────────────────────────────────────
+  # Converts HEVC library to H.264 + compatible audio so all iOS clients can
+  # direct-play without HLS remux or server-side transcoding.
+  # Library paths are the same as Jellyfin's — files are replaced in-place.
+  # Hardlinks to /data/torrents/ are broken on replace but seeding continues
+  # (torrent file still has original inode; only the library copy is replaced).
+  tdarr:
+    image: ghcr.io/haveagitgat/tdarr:latest
+    container_name: tdarr
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=America/Chicago
+      - UMASK_SET=002
+      - serverIP=0.0.0.0
+      - serverPort=8266
+      - webUIPort=8265
+      - internalNode=true
+      - internalNodeIP=0.0.0.0
+      - nodeName=InternalNode
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+    volumes:
+      - M:/Media/config/tdarr/server:/app/server
+      - M:/Media/config/tdarr/configs:/app/configs
+      - M:/Media/config/tdarr/logs:/app/logs
+      - M:/Media/data/movies:/data/movies
+      - M:/Media/data/tv:/data/tv
+      - M:/Media/data/tdarr_cache:/temp
+    ports:
+      - 8265:8265   # Web UI
+      - 8266:8266   # Server (internal node communication)
+    networks:
+      - media-network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu, video, compute]
+    restart: unless-stopped
+
   # ─── Archive Extractor ───────────────────────────────────────────────────────
   unpackerr:
     image: golift/unpackerr:latest
