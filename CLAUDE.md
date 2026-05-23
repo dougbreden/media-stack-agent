@@ -125,6 +125,8 @@ docker compose up -d qbittorrent
 | Jellyfin subtitle mode | Dashboard → Display → Subtitle Mode → Smart |
 | Jellyfin LAN Networks / Known Proxies | Leave blank — Docker bridge (172.18.0.1) makes all traffic look local; these settings have no effect |
 | iOS Jellyfin app streaming quality | In-app Settings → Max Streaming Bitrate → Original (prevents codec re-encoding on top of HLS remux) |
+| Jellyfin hardware transcoding | Dashboard → Playback → Transcoding → Hardware acceleration → NVIDIA NVENC. Config lives in `config/jellyfin/encoding.xml`. GPU (RTX 4070 Ti) is passed through via `NVIDIA_VISIBLE_DEVICES=all` in docker-compose.yml; available as `/dev/dxg` (WSL2 path, not `/dev/nvidia*`). Verified: hevc_cuvid + h264_nvenc at ~20x realtime. |
+| Infuse Pro streaming quality (cellular) | Infuse → Settings → Playback → Streaming Quality → Cellular → set a specific quality/bitrate rather than Auto to force server-side transcode at a predictable bitrate |
 
 ---
 
@@ -197,3 +199,5 @@ content specifically requires Nyaa.si — SubsPlease and Erai-raws only publish 
 | Infuse shows library on cellular but video won't play (spins then errors) | Infuse free tier blocks remote/cellular video streaming — Pro required | Use Jellyfin iOS app (free) or upgrade to Infuse Pro |
 | Jellyfin iOS app has 2–4 s blank screen after every seek | WebView-based app always uses HLS; seeking restarts FFmpeg at the new position | Expected — not a bug. Set Max Streaming Bitrate → Original in app Settings to at least avoid unnecessary transcoding |
 | Jellyseerr crash-loops with "Unexpected token '﻿'" in logs | `settings.json` was written with a UTF-8 BOM by PowerShell 5.1 `Set-Content -Encoding utf8` | Restore `settings.json` from backup zip; strip BOM with `[System.IO.File]::WriteAllBytes()`. **Never use `Set-Content -Encoding utf8` or `Out-File -Encoding utf8` on config JSON files** — always use `[System.IO.File]::WriteAllText($path, $content, [System.Text.UTF8Encoding]::new($false))` |
+| Remote/cellular playback stutters or fails to start (Infuse/Swiftfin/Jellyfin iOS) | HEVC Main 10 files require transcoding; without GPU, software transcode is too slow | GPU passthrough in docker-compose.yml (`NVIDIA_VISIBLE_DEVICES=all`). Check with `docker exec jellyfin sh -c "ls /dev/dxg"` — WSL2 uses `/dev/dxg` not `/dev/nvidia*`. Verify NVENC: `docker exec jellyfin sh -c "/usr/lib/jellyfin-ffmpeg/ffmpeg -init_hw_device cuda=gpu:0 -f lavfi -i nullsrc -frames:v 1 -c:v h264_nvenc -f null -"` |
+| Jellyfin GPU not accessible after `docker compose up` (no `/dev/nvidia*` inside container) | NVIDIA Container Runtime on WSL2 uses `/dev/dxg`, not `/dev/nvidia*`; missing `NVIDIA_VISIBLE_DEVICES` env var | Add `NVIDIA_VISIBLE_DEVICES=all` and `NVIDIA_DRIVER_CAPABILITIES=all` to jellyfin env in compose; capabilities must include `[gpu, video, compute]` |
