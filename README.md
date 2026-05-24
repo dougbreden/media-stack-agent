@@ -332,6 +332,21 @@ Infuse Pro does true direct play (no FFmpeg step), making seeking near-instant �
 
 **Do not set Jellyfin LAN Networks or Known Proxies** to try to fix remote playback in this Docker setup. Docker's port proxy makes every connection (local and remote) appear to arrive from `172.18.0.1` (the Docker bridge gateway), so Jellyfin cannot distinguish local from cellular/Tailscale traffic and these settings have no effect.
 
+### iOS: Mullvad and Tailscale cannot run simultaneously
+iOS only allows one VPN profile active at a time. If Mullvad is active, it captures all traffic including the `100.64.0.0/10` range that Tailscale uses for its mesh addresses. Symptoms: Tailscale shows "Connected" and `tailscale ping` succeeds, but every Tailscale IP (100.x.x.x) times out in the browser. No error message explains the conflict.
+
+Fix: disable Mullvad on the phone before connecting to any Tailscale address. Re-enable Mullvad when done.
+
+### Jellyfin HLS breaks for files recently converted by Tdarr
+When Tdarr converts an HEVC file to H.264, Jellyfin's media database still records the old codec (HEVC). Until a library scan runs, any HLS streaming request causes Jellyfin to pass `-bsf:v hevc_mp4toannexb` to FFmpeg against an H.264 stream — FFmpeg immediately exits with code 234 ("Codec 'h264' is not supported by the bitstream filter 'hevc_mp4toannexb'"). Direct play (desktop browser, Swiftfin native player) is unaffected because it bypasses FFmpeg entirely.
+
+Fix: trigger a library scan — Jellyfin → Dashboard → Libraries → Scan All Libraries. The nightly scheduled scan resolves it automatically. `update.ps1` now triggers a scan after every run so the window of breakage is at most 24 hours.
+
+### Sonarr/Radarr quality profiles: classic or SD-only content silently returns zero results
+Quality profiles are a whitelist — any quality not explicitly listed is rejected, regardless of score. Shows or movies with no HD source (e.g. a 1998 content that only had a DVD release) will return 0 grabs from Sonarr/Radarr indefinitely if the profile only lists HD qualities. Symptoms: series is monitored, 0 history events, 0 files — not even a failed grab.
+
+Fix: for SD-only content, either assign it a profile that includes DVD quality (with 1080p cutoff so it upgrades automatically if HD appears), or edit the existing profile to include DVD in the allowed list. The cutoff controls *when Sonarr stops upgrading*, not *what it will grab initially* — DVD in the allowed list with a 1080p cutoff means "grab DVD now, upgrade to 1080p if it ever exists."
+
 ---
 
 ## Reproduce This Setup
@@ -1495,3 +1510,11 @@ This creates `M:\Media\backups\config-backup-YYYY-MM-DD_HHMM.zip` (~500 MB compr
 | 2026-05-23 | Tdarr flow encoder bug fixed | Root bug: Tdarr Node worker reads `k.inputsDB` not `k.inputs` from the flow config. Flow had only `inputs` fields, so the worker always read plugin defaults (outputCodec=hevc). Fixed by adding matching `inputsDB` fields to all flow plugins. |
 | 2026-05-23 | Tdarr 10-bit HEVC support added | h264_nvenc cannot encode 10-bit (yuv420p10le/p010le). Fix: set hardwareDecoding=false (removes -hwaccel cuda so CPU handles 10-bit→8-bit), and added ffmpegCommandCustomArguments plugin with outputArguments="-pix_fmt yuv420p". Final ffmpeg command: h264_nvenc -qp 20 -preset p4 -pix_fmt yuv420p. |
 | 2026-05-23 | 455 incorrectly encoded files reset | 17 files encoded with hevc_nvenc (pre-inputsDB fix) and 438 "Transcode error" files (10-bit failures) reset via bulk API. Both libraries scanFresh triggered. Queue re-populating at 542 fps GPU encode rate. |
+| 2026-05-23 | Tdarr tile added to Homarr | Tdarr tile added to Homarr dashboard (port 8265). |
+| 2026-05-23 | Jellyfin mobile user created | the mobile account created with 8 Mbps per-user bitrate cap. Allows cellular access without risk of saturating the uplink. |
+| 2026-05-23 | iOS Mullvad + Tailscale conflict identified | iOS enforces one active VPN. Mullvad captures all traffic including 100.x.x.x, blocking Tailscale. Tailscale shows connected but all Tailscale IPs time out. Fix: disable Mullvad when using Tailscale on iOS. |
+| 2026-05-23 | Jellyfin HLS broken for Tdarr-converted files | Jellyfin DB had stale HEVC codec info for files Tdarr converted to H.264. HLS requests applied hevc_mp4toannexb to H.264 streams → FFmpeg exited code 234. Direct play unaffected. Fix: library refresh. Diagnosed via `docker exec jellyfin ffmpeg ...` reproducing the exact failing command. |
+| 2026-05-23 | Gluetun/qBittorrent startup hardened | Root cause of recurring tracker failures: Gluetun iptables state drifts bad after hibernate/Docker restart (not Watchtower — both containers excluded from auto-update). Fix applied in three places: (1) startup-stack.ps1 now force-recreates Gluetun on every boot and cleans qBittorrent lockfile before starting; (2) scripts/fix-vpn.ps1 created as one-shot manual recovery script; (3) nightly 2am scheduled task added via create-startup-task.ps1 to proactively reset before Watchtower's 3am run. |
+| 2026-05-23 | update.ps1 overhauled | Comprehensive maintenance script: pulls images, applies updates, cleans lockfile, force-recreates Gluetun, waits for health checks (not fixed sleeps), verifies VPN tunnel via am.i.mullvad.net, checks qBittorrent for errored torrents, triggers Jellyfin library scan, prunes images, refreshes firewall. Failures accumulate and are reported in summary rather than aborting early. |
+| 2026-05-23 | USAGE.md created | Simple end-user guide covering service URLs, how to request content, client apps, accounts, and basic troubleshooting. Separate from the full runbook README. |
+| 2026-05-23 | Quality profile gap identified for classic/SD-only content | a show (1998) has no HD source on Nyaa.si — only DVD 480p/576p releases exist. HD-1080p quality profile rejected all releases (DVD not in allowed list). Solution: use a profile that includes DVD in the allowed list with 1080p as the cutoff — Sonarr grabs DVD immediately and upgrades automatically if HD appears. |
