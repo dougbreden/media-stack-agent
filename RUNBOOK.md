@@ -73,7 +73,7 @@ You do not need to touch Radarr, Sonarr, Prowlarr, or any other app for normal u
 | sonarr | TV automation | 8989 | http://localhost:8989 |
 | qbittorrent | Torrent client (routes through gluetun) | 8080 | http://localhost:8080 |
 | bazarr | Subtitle downloader | 6767 | http://localhost:6767 |
-| tdarr | Background transcoder — HEVC→H.264 for iOS direct play | 8265 | http://localhost:8265 |
+| tdarr | Background transcoder — standardises library to H.264+AAC for universal iOS compatibility | 8265 | http://localhost:8265 |
 | unpackerr | Auto-extracts RAR/ZIP downloads | — | (no UI — background daemon) |
 | watchtower | Auto-updates all container images nightly | — | (no UI — background daemon) |
 
@@ -341,6 +341,18 @@ Fix: disable Mullvad on the phone before connecting to any Tailscale address. Re
 When Tdarr converts an HEVC file to H.264, Jellyfin's media database still records the old codec (HEVC). Until a library scan runs, any HLS streaming request causes Jellyfin to pass `-bsf:v hevc_mp4toannexb` to FFmpeg against an H.264 stream — FFmpeg immediately exits with code 234 ("Codec 'h264' is not supported by the bitstream filter 'hevc_mp4toannexb'"). Direct play (desktop browser, Swiftfin native player) is unaffected because it bypasses FFmpeg entirely.
 
 Fix: trigger a library scan — Jellyfin → Dashboard → Libraries → Scan All Libraries. The nightly scheduled scan resolves it automatically. `update.ps1` now triggers a scan after every run so the window of breakage is at most 24 hours.
+
+### Remux-1080p in HD-1080p quality profile causes 20–50 GB downloads that Tdarr re-encodes anyway
+A Remux-1080p is a bit-perfect Blu-ray copy: no re-encoding, lossless audio (TrueHD, DTS-HD MA), typically 20–50+ GB. If `Remux-1080p` is in the HD-1080p quality profile's allowed list, Radarr will grab it over a regular Blu-ray encode because it's technically "higher quality."
+
+In a Tdarr standardisation setup this is counterproductive:
+1. Tdarr immediately re-encodes the video to h264_nvenc anyway, discarding the lossless video quality.
+2. Lossless audio (TrueHD/DTS-HD) cannot be decoded or passed through by iOS clients — they silently receive a stereo fallback or no audio.
+3. You download 30 GB to produce the same H.264+AAC output Tdarr would generate from a 4 GB Blu-ray encode.
+
+**Fix:** Remove `Remux-1080p` from the allowed quality list in the HD-1080p profile. Radarr → Settings → Quality Profiles → HD-1080p → remove Remux-1080p. The profile should contain: HDTV-1080p, WEB 1080p (group), Bluray-1080p.
+
+REMUXes only make sense in a separate 4K library for clients that can direct-play with HDR passthrough and lossless audio passthrough (e.g. Infuse Pro with Apple TV hardware decode, or a Plex setup with TrueHD passthrough to an AV receiver).
 
 ### Sonarr/Radarr quality profiles: classic or SD-only content silently returns zero results
 Quality profiles are a whitelist — any quality not explicitly listed is rejected, regardless of score. Shows or movies with no HD source (e.g. a 1998 content that only had a DVD release) will return 0 grabs from Sonarr/Radarr indefinitely if the profile only lists HD qualities. Symptoms: series is monitored, 0 history events, 0 files — not even a failed grab.
@@ -895,37 +907,60 @@ Both are mounted as volumes, so they survive container restarts and updates.
 
 ### 10. Tdarr — http://localhost:8265
 
-Tdarr is a background transcoder that converts HEVC (H.265) files in the library to H.264. This makes the iOS Jellyfin app direct-play them without any server-side transcoding or HLS remux overhead. The GPU handles the encode (h264_nvenc, ~500+ fps for 1080p).
+Tdarr is a background transcoder that standardises the library to H.264 video + AAC stereo audio, making all content direct-play compatible on iOS without any server-side transcoding. The GPU handles video encodes (h264_nvenc, ~500+ fps for 1080p).
+
+**Library IDs (needed for API calls and `tdarr-restore-hevc-flow.ps1`):**
+- Movies: `rUP5cniqB` (path `/data/movies`)
+- TV: `nw7PJBmiV` (path `/data/tv`)
+- Flow ID: `N7tOvfd6i` (name: "Universal H264+AAC")
 
 **First-run setup:**
 - Navigate to http://localhost:8265 — the Tdarr server UI
 - Go to **Libraries** → Add Library:
   - Movies: Name `Movies`, source path `/data/movies`, output path `/data/movies`
   - TV: Name `TV`, source path `/data/tv`, output path `/data/tv`
-- For each library, set **Flow** to `HEVC→H264` (see flow setup below)
+- For each library, set **Flow** to `Universal H264+AAC` (deployed via `tdarr-restore-hevc-flow.ps1`)
 - Enable **On Start Scan** and **Folder Watch**
 
-**Flow "HEVC→H264"** — create this flow in Tdarr → Flows → + New Flow:
+**Flow "Universal H264+AAC"** — 2-branch, 13-node design:
 
-The flow checks if the file is HEVC, and if so transcodes it to H.264 in place (replacing the original). Non-HEVC files are passed through untouched.
+The flow routes files based on current video codec. H.264 files have their video stream copied (no re-encode); non-H.264 files (HEVC/AV1/VP9/etc.) are GPU-encoded. Both branches run two sequential `ffmpegCommandEnsureAudioStream` nodes — one for English, one for Japanese — which add an AAC stereo track at 192k only if no matching stream already exists. Files that are already H.264+AAC stereo get "Not required" immediately.
 
-Node sequence:
-1. **inputFile** — entry point
-2. **checkVideoCodec** (codec: `hevc`) — routes HEVC to encode path, others to replace (no-op)
-3. **ffmpegCommandStart** — initialises ffmpeg command builder
-4. **ffmpegCommandSetVideoEncoder** — settings:
-   - Output codec: `h264`
-   - Hardware type: `nvenc`
-   - Hardware encoding: `true`
-   - Hardware decoding: **`false`** — CPU decodes (required for 10-bit sources; h264_nvenc rejects p010le frames from GPU decode)
-   - Force encoding: `true`
-   - FFmpeg preset: `fast` (maps to NVENC preset p4)
-   - FFmpeg quality: `20` (CQ mode, ~reasonable quality/size balance)
-5. **ffmpegCommandCustomArguments** — Output arguments: **`-pix_fmt yuv420p`** — forces 8-bit output (h264_nvenc cannot encode 10-bit; without this, HEVC Main 10 sources fail)
-6. **ffmpegCommandExecute** — runs the ffmpeg command
-7. **replaceOriginalFile** — replaces original with transcoded output
+**Branch 1 — H.264 source (copy video, ensure AAC):**
+1. `inputFile` → `checkVideoCodec(h264)` [match] → `ffmpegCommandStart`
+2. `ffmpegCommandSetVideoEncoder` — outputCodec=h264, hardwareEncoding=false, forceEncoding=false (copies, never re-encodes)
+3. `ffmpegCommandEnsureAudioStream` — audioEncoder=aac, language=en, channels=2, bitrate=192k
+4. `ffmpegCommandEnsureAudioStream` — audioEncoder=aac, language=j (matches "ja" and "jpn"), channels=2, bitrate=192k
+5. `ffmpegCommandExecute` → `replaceOriginalFile`
 
-**Critical:** Every plugin node in the flow JSON must have BOTH `inputs` AND `inputsDB` fields with identical values. The Tdarr Node worker reads `inputsDB` at runtime, not `inputs`. If `inputsDB` is missing, the worker uses plugin defaults (which default to outputCodec=hevc), and the encode silently produces HEVC with hevc_nvenc instead of H.264.
+**Branch 2 — non-H.264 source (GPU encode + ensure AAC):**
+1. `inputFile` → `checkVideoCodec(h264)` [no match] → `ffmpegCommandStart`
+2. `ffmpegCommandSetVideoEncoder` — outputCodec=h264, hardwareType=nvenc, hardwareEncoding=true, hardwareDecoding=**false**, forceEncoding=true, preset=fast, quality=20
+3. `ffmpegCommandCustomArguments` — outputArguments=`-pix_fmt yuv420p` (forces 8-bit output; see note below)
+4. `ffmpegCommandEnsureAudioStream` — audioEncoder=aac, language=en, channels=2, bitrate=192k
+5. `ffmpegCommandEnsureAudioStream` — audioEncoder=aac, language=j, channels=2, bitrate=192k
+6. `ffmpegCommandExecute` → `replaceOriginalFile`
+
+**Key design notes:**
+
+- **EnsureAudioStream deduplication:** if a matching AAC stereo track already exists for that language, the plugin skips silently — no duplicate is added. This is why Phase 2 can safely re-process files that Phase 1 already correctly handled.
+
+- **`language=j` substring match:** `"ja".includes("j")` and `"jpn".includes("j")` are both true, so a single node covers both ISO 639-1 and ISO 639-2 Japanese language tags. No other common language code contains `j`.
+
+- **Why two language nodes instead of one with `language=""`:** The plugin replaces empty string with its own default (`"en"`) via `loadDefaultValues.js` — there is no wildcard. Two sequential nodes (en + j) are the correct pattern to cover dual-language content.
+
+- **Why `hardwareDecoding=false` on the encode path:** HEVC Main 10 sources have 10-bit pixel format (yuv420p10le). With `-hwaccel cuda` active, the GPU decoder outputs p010le which h264_nvenc rejects ("10-bit encode not supported"). CPU decode converts 10-bit to 8-bit before the GPU encoder sees it.
+
+- **Why `-pix_fmt yuv420p`:** Belt-and-suspenders. CPU decode of 10-bit HEVC can still pass p010le in some edge cases. This flag forces 8-bit output unconditionally.
+
+**Critical — `inputs` vs `inputsDB`:** Every plugin node in the flow JSON must have BOTH `inputs` AND `inputsDB` fields with identical values. The Tdarr Node worker reads `inputsDB` at runtime, not `inputs`. If `inputsDB` is missing, the worker uses plugin defaults (outputCodec=hevc, hardwareType=auto) and produces hevc_nvenc instead of h264_nvenc — silently.
+
+The flow is stored in SQLite (`config/tdarr/server/Tdarr/DB2/SQL/database.db`), not via the API. To redeploy after a database wipe or flow corruption:
+
+```powershell
+# Stops Tdarr, writes the full flow JSON to SQLite, resets all files, starts Tdarr, triggers scanFresh
+M:\Media\scripts\tdarr-restore-hevc-flow.ps1
+```
 
 **Worker configuration:**
 - Nodes → InternalNode → set `transcodegpu: 1`, `healthcheckcpu: 2`, others 0
@@ -941,27 +976,15 @@ $r = Invoke-RestMethod -Method Post "http://localhost:8265/api/v2/cruddb" -Conte
 Write-Host "Staged: $($r.array.Count)"
 ```
 
-**Resetting files for re-processing** (if flow settings change):
+**Resetting files for re-processing** (if flow settings change, run `tdarr-restore-hevc-flow.ps1` instead — it handles everything):
 ```powershell
-# Inside the tdarr container — reset all Transcode error files
-docker exec tdarr sh -c "curl -s -X POST http://localhost:8266/api/v2/search-db -H 'Content-Type: application/json' -d '{\"data\":{\"collection\":\"FileJSONDB\",\"mode\":\"search\",\"docID\":\"\",\"obj\":{\"TranscodeDecisionMaker\":\"Transcode error\"}}}' | python3 -c \"
-import json,sys,subprocess
-data=json.load(sys.stdin)
-ids=[d['_id'] for d in data if '_id' in d]
-print(f'Found {len(ids)} files')
-body=json.dumps({'data':{'fileIds':ids,'updatedObj':{'TranscodeDecisionMaker':'','lastTranscodeDate':0}}})
-r=subprocess.run(['curl','-s','-X','POST','http://localhost:8266/api/v2/bulk-update-files','-H','Content-Type: application/json','-d',body],capture_output=True,text=True)
-print(r.stdout[:200])
-\""
-```
+# Manual reset of all evaluated files via SQLite (Tdarr must be stopped first)
+docker exec tdarr sqlite3 /app/server/Tdarr/DB2/SQL/database.db "UPDATE filejsondb SET json_data = json_set(json_data, '$.TranscodeDecisionMaker', '', '$.lastTranscodeDate', 0) WHERE json_extract(json_data,'$.TranscodeDecisionMaker') != '';"
 
-Then trigger a fresh scan to re-populate the queue:
-```powershell
-# Replace rUP5cniqB with your library ID (visible in Tdarr Libraries page URL)
+# Then trigger scanFresh (use scanFresh not scanFindNew — scanFindNew skips cleared files)
 $body = '{"data":{"dbID":"rUP5cniqB","mode":"scanFresh","scanConfig":{"dbID":"rUP5cniqB","mode":"scanFresh","arrayOrPath":"/data/movies"}}}'
 Invoke-RestMethod -Method Post "http://localhost:8265/api/v2/scan-files" -Body $body -ContentType "application/json"
 ```
-Note: use `scanFresh` (not `scanFindNew`) when resetting files — `scanFindNew` only picks up new/changed files and will not re-evaluate files whose `TranscodeDecisionMaker` was cleared.
 
 ### 11. Firewall Setup (required for LAN + Tailscale access)
 
@@ -1320,6 +1343,49 @@ Install Tailscale on any other device, log in with the same account, and use:
 ---
 
 ## Maintenance
+
+### Custom maintenance scripts
+
+These scripts live in `M:\Media\scripts\` and handle tasks not covered by automatic processes.
+
+**`library-report.ps1`** — Library state report. Probes every media file via Jellyfin's bundled ffprobe, caches by file size + mtime, and reports per-library codec distribution, standardisation percentage, missing AAC count, and duplicate stream count. Run after Tdarr completes a processing pass to confirm the library is fully standardised.
+
+```powershell
+# Report (read-only, no changes made)
+M:\Media\scripts\library-report.ps1
+
+# Force full re-probe ignoring cache
+M:\Media\scripts\library-report.ps1 -NoCache
+```
+
+Cache lives at `M:\Media\library-report-cache.json` — excluded from git. First run on a large library takes 10–20 minutes; subsequent runs finish in seconds.
+
+**`dedup-audio.ps1`** — Duplicate audio stream remover. Finds audio streams sharing the same codec, channel count, and language tag within a file and removes all but the first via fast copy remux (no re-encode). Catches any source of duplication: Tdarr flow bugs, manual ffmpeg mistakes, source Blu-ray mux errors.
+
+```powershell
+# Preview what would be removed (no changes)
+M:\Media\scripts\dedup-audio.ps1 -DryRun
+
+# Fix all duplicates under M:\Media\data
+M:\Media\scripts\dedup-audio.ps1
+
+# Fix a specific subtree
+M:\Media\scripts\dedup-audio.ps1 -MediaRoot "M:\Media\data\movies"
+```
+
+Requires the Jellyfin container running (uses its bundled ffprobe and ffmpeg). Tdarr does not need to be stopped.
+
+**`tdarr-restore-hevc-flow.ps1`** — Redeploys the Universal H264+AAC flow to SQLite, resets all files to unprocessed state, and triggers scanFresh on both libraries. Run after a flow config change or if the Tdarr database is wiped.
+
+```powershell
+M:\Media\scripts\tdarr-restore-hevc-flow.ps1
+```
+
+**`backup-config.ps1`** — Creates a timestamped zip of `M:\Media\config\` for migration or recovery. Run before any major change or migration.
+
+**`update.ps1`** — Comprehensive maintenance: pulls images, force-recreates Gluetun, verifies VPN tunnel, checks qBittorrent for errored torrents, triggers Jellyfin library scan, prunes old images. Run periodically or before a planned maintenance window.
+
+**`setup-firewall.ps1`** — Disables Docker Desktop's blanket block rules and adds allow rules for all published ports. Must be run as Administrator. Re-run any time Docker Desktop updates and LAN/Tailscale access breaks.
 
 **Check container status:**
 ```powershell
