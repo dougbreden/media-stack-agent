@@ -12,6 +12,9 @@ data/
 # Config backups (can be large zips — store externally, not in git)
 backups/
 
+# Generated cache files
+library-report-cache.json
+
 # Diagnostic / temp scripts (prefixed _ by convention)
 scripts/_*
 
