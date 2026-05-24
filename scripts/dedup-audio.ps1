@@ -24,10 +24,10 @@
 
 .EXAMPLE
     # Check what would be removed without touching anything
-    .\tdarr-dedup-aac.ps1 -DryRun
+    .\dedup-audio.ps1 -DryRun
 
     # Fix all duplicates
-    .\tdarr-dedup-aac.ps1
+    .\dedup-audio.ps1
 
     # Fix a specific subtree
     .\tdarr-dedup-aac.ps1 -MediaRoot "M:\Media\data\movies"
@@ -64,6 +64,7 @@ $checked      = 0
 $alreadyClean = 0
 $withDups     = 0
 $fixed        = 0
+$skipped      = @()
 $failed       = @()
 
 foreach ($file in $allFiles) {
@@ -81,7 +82,7 @@ foreach ($file in $allFiles) {
 
     if (-not $probeRaw -or $probeRaw -notmatch '"streams"') {
         Write-Host "  SKIP (probe failed): $leaf" -ForegroundColor Yellow
-        $failed += $file.FullName
+        $skipped += $file.FullName
         continue
     }
 
@@ -171,10 +172,13 @@ if (-not $DryRun) {
     Write-Host "  Fixed         : $fixed" -ForegroundColor Green
 }
 if ($failed.Count -gt 0) {
-    Write-Host "  Failed        : $($failed.Count)" -ForegroundColor Red
+    Write-Host "  Fix errors    : $($failed.Count)" -ForegroundColor Red
     $failed | ForEach-Object { Write-Host "    - $_" -ForegroundColor Red }
 } else {
-    Write-Host "  Failed        : 0" -ForegroundColor Green
+    Write-Host "  Fix errors    : 0" -ForegroundColor Green
+}
+if ($skipped.Count -gt 0) {
+    Write-Host "  Probe skipped : $($skipped.Count) (locked/in-use files -- normal if Tdarr is running)" -ForegroundColor DarkGray
 }
 if ($DryRun -and $withDups -gt 0) {
     Write-Host ""
