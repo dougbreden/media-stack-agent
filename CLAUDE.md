@@ -133,26 +133,50 @@ docker compose up -d qbittorrent
 
 ---
 
-## Tdarr — HEVC→H264 Transcoding
+## Tdarr — Universal H264+AAC Transcoding
 
-Tdarr runs background transcoding to convert HEVC files to H.264 for iOS direct-play. Server API is on port 8266, web UI on port 8265. Uses the same NVIDIA GPU passthrough as Jellyfin.
+Tdarr runs background transcoding to standardise the entire library to H.264 video + AAC stereo audio for universal device compatibility. Server API is on port 8266, web UI on port 8265. Uses the same NVIDIA GPU passthrough as Jellyfin.
 
 **Library IDs:**
 - Movies: `rUP5cniqB` (path `/data/movies`)
 - TV: `nw7PJBmiV` (path `/data/tv`)
 
-**Flow ID:** `N7tOvfd6i` (name: "HEVC→H264") — stored in FlowsJSONDB collection.
+**Flow ID:** `N7tOvfd6i` (name: "Universal H264+AAC") — stored in SQLite `flowsjsondb` table (NOT accessible via cruddb API — must edit SQLite directly with Tdarr stopped).
 
-**Worker reads `k.inputsDB`, NOT `k.inputs`** — this is the critical non-obvious fact. Every plugin node in the flow JSON must have BOTH `inputs` and `inputsDB` fields with identical values. If `inputsDB` is missing, the worker reads plugin defaults instead (outputCodec=hevc, hardwareType=auto). This was the root bug that caused hevc_nvenc to be used instead of h264_nvenc.
+**Flow logic (4 branches):**
+| Video codec | Audio has AAC? | Action |
+|---|---|---|
+| H264 | Yes | Not required — already standardised |
+| H264 | No | Copy video + add AAC stereo track (192k) |
+| non-H264 (HEVC/AV1/VP9/etc.) | Yes | GPU encode to h264_nvenc, keep audio |
+| non-H264 | No | GPU encode to h264_nvenc + add AAC stereo track |
 
-**Final ffmpeg command produced by the flow:**
+**Key plugin sequence (non-H264 path):**
+`inputFile` → `checkVideoCodec(h264)` → `ffmpegCommandStart` → `ffmpegCommandSetVideoEncoder` → `checkAudioCodec(aac)` → `ffmpegCommandCustomArguments` → `ffmpegCommandExecute` → `replaceOriginalFile`
+
+**ffmpeg commands produced:**
 ```
+# non-H264, no AAC (HEVC Main 10 typical case):
+ffmpeg -i input.mkv -map 0:0 -c:0 h264_nvenc -qp 20 -preset p4 -map 0:1 -c:1 copy -map 0:1 -c:2 aac -ac 2 -b:a 192k -pix_fmt yuv420p output.mkv
+
+# non-H264, already has AAC:
 ffmpeg -i input.mkv -map 0:0 -c:0 h264_nvenc -qp 20 -preset p4 -map 0:1 -c:1 copy -pix_fmt yuv420p output.mkv
+
+# H264, no AAC:
+ffmpeg -i input.mkv -map 0:0 -c:0 copy -map 0:1 -c:1 copy -map 0:1 -c:2 aac -ac 2 -b:a 192k output.mkv
 ```
 
-**Why `hardwareDecoding: "false"`:** HEVC Main 10 sources have 10-bit pixel format (yuv420p10le / p010le). When `-hwaccel cuda` is active, the GPU decoder outputs p010le frames, which h264_nvenc rejects with "10 bit encode not supported". Setting hardwareDecoding=false removes -hwaccel cuda — the CPU decodes and converts 10-bit→8-bit, then the GPU encodes via h264_nvenc.
+**Worker reads `k.inputsDB`, NOT `k.inputs`** — every plugin node in the flow JSON must have BOTH `inputs` and `inputsDB` fields with identical values. If `inputsDB` is missing, the worker reads plugin defaults (outputCodec=hevc, hardwareType=auto). This was the root bug that caused hevc_nvenc instead of h264_nvenc.
 
-**Why `-pix_fmt yuv420p`:** Explicitly forces 8-bit output. Without it, CPU decode of 10-bit HEVC may pass p010le to h264_nvenc even without -hwaccel. Belt-and-suspenders fix that ensures 10-bit sources always produce 8-bit H.264.
+**Why `hardwareDecoding: "false"` on the encode path:** HEVC Main 10 sources have 10-bit pixel format (yuv420p10le). When `-hwaccel cuda` is active, GPU decoder outputs p010le which h264_nvenc rejects ("10 bit encode not supported"). CPU decode converts 10-bit to 8-bit; GPU then encodes via h264_nvenc.
+
+**Why `-pix_fmt yuv420p`:** Forces 8-bit output. Without it, CPU decode of 10-bit HEVC can still pass p010le to h264_nvenc. Belt-and-suspenders fix.
+
+**Why `checkAudioCodec` is placed after `ffmpegCommandSetVideoEncoder`:** The plugin reads `args.inputFileObj.ffProbeData.streams` (original file probe data), not the in-progress ffmpeg command state. Placement after the encoder plugin is safe.
+
+**Why `ffmpegCommandExecute` runs even when `forceEncoding=false` (H264 copy path):** `ffmpegCommandCustomArguments` pushes to `overallOuputArguments`. The execute plugin sets `shouldProcess = true` when `overallOuputArguments.length > 0` (line ~173 of execute plugin). So any custom output argument guarantees execution.
+
+**Flow is stored in SQLite, not via API.** To modify: stop Tdarr, use sqlite3 on `config/tdarr/server/Tdarr/DB2/SQL/database.db`, always use `.read <sqlfile>` to avoid `-c:N` flag parsing issues. Use single-quoted `@'...'@` PowerShell here-strings so `$.flowId` is not interpolated.
 
 **Tdarr CRUD API pattern:**
 ```powershell
@@ -160,7 +184,7 @@ ffmpeg -i input.mkv -map 0:0 -c:0 h264_nvenc -qp 20 -preset p4 -map 0:1 -c:1 cop
 $r = Invoke-RestMethod -Method Post "http://localhost:8265/api/v2/cruddb" -ContentType "application/json" -Body '{"data":{"collection":"StagedJSONDB","mode":"getAll"}}'
 
 # Valid collection names: StagedJSONDB, FileJSONDB, FlowsJSONDB, StagedJSONDB
-# (NOT the library ID — that causes 400 "must be equal to one of the allowed values")
+# (NOT the library ID -- that causes 400 "must be equal to one of the allowed values")
 
 # Check active worker status (shows current file + ffmpeg preset + percentage)
 Invoke-RestMethod "http://localhost:8265/api/v2/get-nodes"
@@ -168,7 +192,7 @@ Invoke-RestMethod "http://localhost:8265/api/v2/get-nodes"
 # Trigger fresh library scan (re-evaluates all files, including reset ones)
 $body = '{"data":{"dbID":"rUP5cniqB","mode":"scanFresh","scanConfig":{"dbID":"rUP5cniqB","mode":"scanFresh","arrayOrPath":"/data/movies"}}}'
 Invoke-RestMethod -Method Post "http://localhost:8265/api/v2/scan-files" -Body $body -ContentType "application/json"
-# Use scanFresh not scanFindNew — scanFindNew skips files with cleared TranscodeDecisionMaker
+# Use scanFresh not scanFindNew -- scanFindNew skips files with cleared TranscodeDecisionMaker
 
 # Reset files for re-processing (e.g. after flow config change)
 $body = '{"data":{"fileIds":["id1","id2"],"updatedObj":{"TranscodeDecisionMaker":"","lastTranscodeDate":0}}}'
@@ -176,10 +200,10 @@ Invoke-RestMethod -Method Post "http://localhost:8265/api/v2/bulk-update-files" 
 ```
 
 **TranscodeDecisionMaker values:**
-- `""` — not yet evaluated (will be picked up on next scan)
-- `"Not required"` — file was not HEVC, flow passed through without encoding
-- `"Transcode success"` — successfully re-encoded to H.264
-- `"Transcode error"` — ffmpeg failed (check job report for error; common: 10-bit encode without -pix_fmt yuv420p)
+- `""` -- not yet evaluated (will be picked up on next scan)
+- `"Not required"` -- file already meets the flow's requirements (H264+AAC), no processing needed
+- `"Transcode success"` -- successfully processed
+- `"Transcode error"` -- ffmpeg failed (check job report; common: 10-bit encode without -pix_fmt yuv420p)
 
 ---
 
@@ -257,3 +281,5 @@ content specifically requires Nyaa.si — SubsPlease and Erai-raws only publish 
 | Tdarr encodes with hevc_nvenc instead of h264_nvenc | Worker reads `k.inputsDB` not `k.inputs`; flow plugins only had `inputs` fields, so defaults were used | Ensure every plugin node in the flow JSON has both `inputs` AND `inputsDB` with identical values |
 | Tdarr job fails: "10 bit encode not supported" | h264_nvenc cannot encode 10-bit pixel formats; `-hwaccel cuda` decodes HEVC Main 10 to p010le which h264_nvenc rejects | Set `hardwareDecoding: "false"` in ffmpegCommandSetVideoEncoder plugin, AND add ffmpegCommandCustomArguments plugin with `outputArguments: "-pix_fmt yuv420p"` |
 | Tdarr queue empty after resetting files | Used `scanFindNew` which only processes new/changed files, not files with cleared TranscodeDecisionMaker | Use `scanFresh` mode in the scan-files API — it re-evaluates all files in the library |
+| Tdarr adds AAC to wrong stream on Blu-ray rips with 6+ streams | `-c:2 aac` in ffmpegCommandCustomArguments targets output stream index 2 (hardcoded), which already exists in multi-stream files; the intended new stream gets no explicit codec | Known limitation. File is still playable and has AAC somewhere. For 2-stream files (most TV/content downloads) the current approach is correct. Multi-stream Blu-ray rips are edge cases |
+| Tdarr "Transcode error" files not re-queued after flow fix | Errored files stay in error state permanently; only files with TranscodeDecisionMaker="" are picked up by a fresh scan | Use bulk-update-files API to reset errored files to TranscodeDecisionMaker="". The Phase 2 restore script resets all errored files automatically |
