@@ -1,26 +1,30 @@
 <#
 .SYNOPSIS
-    Phase 2 of the AAC backfill: upgrade the main flow to Universal H264+AAC,
-    revert libraries to it, and re-queue all HEVC files.
+    Deploy the Universal H264+AAC flow and re-queue the entire library.
 
 .DESCRIPTION
-    Run this AFTER the "Add AAC to H264" pass is complete (queue empty, worker idle).
+    Run this AFTER tdarr-dedup-aac.ps1 (which removes Phase 1 duplicate AAC tracks
+    and leaves Tdarr stopped).
 
     What it does:
-      1. Stops Tdarr
-      2. Upgrades N7tOvfd6i to the comprehensive "Universal H264+AAC" flow:
-             - H264 + already has AAC  -> Not required
-             - H264 + no AAC           -> copy video + add AAC stereo track
-             - non-H264 (HEVC/AV1/...) + has AAC -> GPU encode to H264
-             - non-H264 + no AAC       -> GPU encode to H264 + add AAC stereo track
+      1. Stops Tdarr (no-op if already stopped by dedup script)
+      2. Updates flow N7tOvfd6i to the clean 2-branch Universal H264+AAC design:
+           - H264 branch: copy video + ffmpegCommandEnsureAudioStream(en) +
+             ffmpegCommandEnsureAudioStream(j) — adds AAC if missing, skips if present
+           - non-H264 branch: GPU encode to h264_nvenc + -pix_fmt yuv420p +
+             same two EnsureAudioStream nodes
+           Both EnsureAudioStream nodes use built-in deduplication (no duplicate tracks)
+           and dynamic {outputIndex} placeholders (no stream-index conflicts)
       3. Reverts both library flowIds back to N7tOvfd6i
       4. Deletes the temporary AddAACH264x flow
-      5. Restarts Tdarr
-      6. Resets HEVC files (marked Not required during Phase 1) for re-processing
-      7. Triggers a fresh scan on both libraries
+      5. Resets ALL previously-evaluated files for re-processing via SQLite
+      6. Starts Tdarr and triggers fresh scans on both libraries
 
-    After this script, every new download is automatically standardised to
-    H264 + AAC regardless of original codec, with no duplicate AAC tracks added.
+    After this script:
+      - Every file goes through the new flow
+      - Files already standardised (H264 + AAC) are marked "Not required" — no duplicate tracks
+      - HEVC/AV1/other files are queued for GPU conversion to H264 + AAC
+      - English and Japanese AAC stereo tracks are both ensured on each file
 #>
 
 $StackDir    = "M:\Media"
@@ -28,12 +32,12 @@ $ComposeFile = "$StackDir\docker-compose.yml"
 $Tdarr       = "http://localhost:8265"
 
 # -- Step 1: Stop Tdarr -------------------------------------------------------
-Write-Host "[1/6] Stopping Tdarr..." -ForegroundColor Cyan
+Write-Host "[1/5] Stopping Tdarr..." -ForegroundColor Cyan
 docker compose -f $ComposeFile stop tdarr 2>&1 | Out-Null
 Write-Host "  Stopped" -ForegroundColor Green
 
-# -- Step 2: Locate sqlite3 (download if session was rebooted) ----------------
-Write-Host "[2/6] Locating sqlite3..." -ForegroundColor Cyan
+# -- Step 2: Locate sqlite3 ---------------------------------------------------
+Write-Host "[2/5] Locating sqlite3..." -ForegroundColor Cyan
 $sqlite3 = (Get-ChildItem "$env:TEMP\sqlite3" -Recurse -Filter "sqlite3.exe" -ErrorAction SilentlyContinue).FullName
 if (-not $sqlite3) {
     Write-Host "  Downloading sqlite3..." -ForegroundColor Gray
@@ -43,16 +47,22 @@ if (-not $sqlite3) {
     Expand-Archive $zip -DestinationPath $dest -Force
     $sqlite3 = (Get-ChildItem $dest -Recurse -Filter "sqlite3.exe").FullName
 }
-Write-Host "  sqlite3 at $sqlite3" -ForegroundColor Green
+Write-Host "  sqlite3: $sqlite3" -ForegroundColor Green
 
 $db = "$StackDir\config\tdarr\server\Tdarr\DB2\SQL\database.db"
 
-# -- Step 3: Update main flow + revert libraries + delete temp flow -----------
-Write-Host "[3/6] Updating Tdarr flow and library settings in SQLite..." -ForegroundColor Cyan
+# -- Step 3: Update flow, revert libraries, delete temp flow, reset all files -
+Write-Host "[3/5] Updating Tdarr database..." -ForegroundColor Cyan
 
+# Flow JSON: 2-branch Universal H264+AAC
+#   H264 branch (right):  Start -> SetVideoEncoder(copy) -> EnsureAudio(en) -> EnsureAudio(j) -> Execute -> Replace
+#   non-H264 branch (left): Start -> SetVideoEncoder(nvenc,force) -> CustomArgs(-pix_fmt yuv420p) -> EnsureAudio(en) -> EnsureAudio(j) -> Execute -> Replace
+# EnsureAudioStream uses {outputIndex} placeholders (no hardcoded stream indices) and
+# has built-in deduplication (skips if AAC stereo already present for that language).
+# Both inputs and inputsDB are set on every plugin node — worker reads inputsDB.
 [System.IO.File]::WriteAllText("$env:TEMP\restore.sql", @'
 UPDATE flowsjsondb
-SET json_data = '{"_id":"N7tOvfd6i","name":"Universal H264+AAC","priority":0,"flowPlugins":[{"id":"n_input","sourceRepo":"Community","inputs":{},"inputsDB":{},"position":{"y":50,"x":500},"pluginName":"inputFile","version":"1.0.0"},{"id":"n_vcheck","sourceRepo":"Community","inputs":{"codec":"h264"},"inputsDB":{"codec":"h264"},"position":{"y":180,"x":500},"pluginName":"checkVideoCodec","version":"1.0.0"},{"id":"n_acheck1","sourceRepo":"Community","inputs":{"codec":"aac","checkBitrate":"false","greaterThan":"50000","lessThan":"1000000"},"inputsDB":{"codec":"aac","checkBitrate":"false","greaterThan":"50000","lessThan":"1000000"},"position":{"y":320,"x":800},"pluginName":"checkAudioCodec","version":"1.0.0"},{"id":"n_start1","sourceRepo":"Community","inputs":{},"inputsDB":{},"position":{"y":460,"x":800},"pluginName":"ffmpegCommandStart","version":"1.0.0"},{"id":"n_enc1","sourceRepo":"Community","inputs":{"outputCodec":"h264","hardwareType":"nvenc","hardwareEncoding":"false","hardwareDecoding":"false","forceEncoding":"false","ffmpegPresetEnabled":"false","ffmpegQualityEnabled":"false"},"inputsDB":{"outputCodec":"h264","hardwareType":"nvenc","hardwareEncoding":"false","hardwareDecoding":"false","forceEncoding":"false","ffmpegPresetEnabled":"false","ffmpegQualityEnabled":"false"},"position":{"y":580,"x":800},"pluginName":"ffmpegCommandSetVideoEncoder","version":"1.0.0"},{"id":"n_args1","sourceRepo":"Community","inputs":{"inputArguments":"","outputArguments":"-map 0:1 -c:2 aac -ac 2 -b:a 192k"},"inputsDB":{"inputArguments":"","outputArguments":"-map 0:1 -c:2 aac -ac 2 -b:a 192k"},"position":{"y":700,"x":800},"pluginName":"ffmpegCommandCustomArguments","version":"1.0.0"},{"id":"n_exec1","sourceRepo":"Community","inputs":{},"inputsDB":{},"position":{"y":820,"x":800},"pluginName":"ffmpegCommandExecute","version":"1.0.0"},{"id":"n_start2","sourceRepo":"Community","inputs":{},"inputsDB":{},"position":{"y":320,"x":200},"pluginName":"ffmpegCommandStart","version":"1.0.0"},{"id":"n_enc2","sourceRepo":"Community","inputs":{"outputCodec":"h264","hardwareType":"nvenc","hardwareEncoding":"true","hardwareDecoding":"false","forceEncoding":"true","ffmpegPresetEnabled":"true","ffmpegPreset":"fast","ffmpegQualityEnabled":"true","ffmpegQuality":"20"},"inputsDB":{"outputCodec":"h264","hardwareType":"nvenc","hardwareEncoding":"true","hardwareDecoding":"false","forceEncoding":"true","ffmpegPresetEnabled":"true","ffmpegPreset":"fast","ffmpegQualityEnabled":"true","ffmpegQuality":"20"},"position":{"y":460,"x":200},"pluginName":"ffmpegCommandSetVideoEncoder","version":"1.0.0"},{"id":"n_acheck2","sourceRepo":"Community","inputs":{"codec":"aac","checkBitrate":"false","greaterThan":"50000","lessThan":"1000000"},"inputsDB":{"codec":"aac","checkBitrate":"false","greaterThan":"50000","lessThan":"1000000"},"position":{"y":580,"x":200},"pluginName":"checkAudioCodec","version":"1.0.0"},{"id":"n_args2a","sourceRepo":"Community","inputs":{"inputArguments":"","outputArguments":"-pix_fmt yuv420p"},"inputsDB":{"inputArguments":"","outputArguments":"-pix_fmt yuv420p"},"position":{"y":700,"x":50},"pluginName":"ffmpegCommandCustomArguments","version":"1.0.0"},{"id":"n_exec2a","sourceRepo":"Community","inputs":{},"inputsDB":{},"position":{"y":820,"x":50},"pluginName":"ffmpegCommandExecute","version":"1.0.0"},{"id":"n_args2b","sourceRepo":"Community","inputs":{"inputArguments":"","outputArguments":"-map 0:1 -c:2 aac -ac 2 -b:a 192k -pix_fmt yuv420p"},"inputsDB":{"inputArguments":"","outputArguments":"-map 0:1 -c:2 aac -ac 2 -b:a 192k -pix_fmt yuv420p"},"position":{"y":700,"x":350},"pluginName":"ffmpegCommandCustomArguments","version":"1.0.0"},{"id":"n_exec2b","sourceRepo":"Community","inputs":{},"inputsDB":{},"position":{"y":820,"x":350},"pluginName":"ffmpegCommandExecute","version":"1.0.0"},{"id":"n_replace","sourceRepo":"Community","inputs":{},"inputsDB":{},"position":{"y":960,"x":500},"pluginName":"replaceOriginalFile","version":"1.0.0"}],"flowEdges":[{"target":"n_vcheck","source":"n_input","id":"e1","targetHandle":null,"sourceHandle":"1"},{"target":"n_acheck1","source":"n_vcheck","id":"e2","targetHandle":null,"sourceHandle":"1"},{"target":"n_start2","source":"n_vcheck","id":"e3","targetHandle":null,"sourceHandle":"2"},{"target":"n_replace","source":"n_acheck1","id":"e4","targetHandle":null,"sourceHandle":"1"},{"target":"n_start1","source":"n_acheck1","id":"e5","targetHandle":null,"sourceHandle":"2"},{"target":"n_enc1","source":"n_start1","id":"e6","targetHandle":null,"sourceHandle":"1"},{"target":"n_args1","source":"n_enc1","id":"e7","targetHandle":null,"sourceHandle":"1"},{"target":"n_exec1","source":"n_args1","id":"e8","targetHandle":null,"sourceHandle":"1"},{"target":"n_replace","source":"n_exec1","id":"e9","targetHandle":null,"sourceHandle":"1"},{"target":"n_enc2","source":"n_start2","id":"e10","targetHandle":null,"sourceHandle":"1"},{"target":"n_acheck2","source":"n_enc2","id":"e11","targetHandle":null,"sourceHandle":"1"},{"target":"n_args2a","source":"n_acheck2","id":"e12","targetHandle":null,"sourceHandle":"1"},{"target":"n_args2b","source":"n_acheck2","id":"e13","targetHandle":null,"sourceHandle":"2"},{"target":"n_exec2a","source":"n_args2a","id":"e14","targetHandle":null,"sourceHandle":"1"},{"target":"n_exec2b","source":"n_args2b","id":"e15","targetHandle":null,"sourceHandle":"1"},{"target":"n_replace","source":"n_exec2a","id":"e16","targetHandle":null,"sourceHandle":"1"},{"target":"n_replace","source":"n_exec2b","id":"e17","targetHandle":null,"sourceHandle":"1"}],"isUiLocked":false}',
+SET json_data = '{"_id":"N7tOvfd6i","name":"Universal H264+AAC","priority":0,"flowPlugins":[{"id":"n_input","sourceRepo":"Community","inputs":{},"inputsDB":{},"position":{"y":50,"x":500},"pluginName":"inputFile","version":"1.0.0"},{"id":"n_vcheck","sourceRepo":"Community","inputs":{"codec":"h264"},"inputsDB":{"codec":"h264"},"position":{"y":180,"x":500},"pluginName":"checkVideoCodec","version":"1.0.0"},{"id":"n_h264_start","sourceRepo":"Community","inputs":{},"inputsDB":{},"position":{"y":320,"x":800},"pluginName":"ffmpegCommandStart","version":"1.0.0"},{"id":"n_h264_enc","sourceRepo":"Community","inputs":{"outputCodec":"h264","hardwareType":"nvenc","hardwareEncoding":"false","hardwareDecoding":"false","forceEncoding":"false","ffmpegPresetEnabled":"false","ffmpegQualityEnabled":"false"},"inputsDB":{"outputCodec":"h264","hardwareType":"nvenc","hardwareEncoding":"false","hardwareDecoding":"false","forceEncoding":"false","ffmpegPresetEnabled":"false","ffmpegQualityEnabled":"false"},"position":{"y":460,"x":800},"pluginName":"ffmpegCommandSetVideoEncoder","version":"1.0.0"},{"id":"n_h264_aac_en","sourceRepo":"Community","inputs":{"audioEncoder":"aac","language":"en","channels":"2","enableBitrate":"true","bitrate":"192k","enableSamplerate":"false","samplerate":"48k"},"inputsDB":{"audioEncoder":"aac","language":"en","channels":"2","enableBitrate":"true","bitrate":"192k","enableSamplerate":"false","samplerate":"48k"},"position":{"y":600,"x":800},"pluginName":"ffmpegCommandEnsureAudioStream","version":"1.0.0"},{"id":"n_h264_aac_ja","sourceRepo":"Community","inputs":{"audioEncoder":"aac","language":"j","channels":"2","enableBitrate":"true","bitrate":"192k","enableSamplerate":"false","samplerate":"48k"},"inputsDB":{"audioEncoder":"aac","language":"j","channels":"2","enableBitrate":"true","bitrate":"192k","enableSamplerate":"false","samplerate":"48k"},"position":{"y":740,"x":800},"pluginName":"ffmpegCommandEnsureAudioStream","version":"1.0.0"},{"id":"n_hevc_start","sourceRepo":"Community","inputs":{},"inputsDB":{},"position":{"y":320,"x":200},"pluginName":"ffmpegCommandStart","version":"1.0.0"},{"id":"n_hevc_enc","sourceRepo":"Community","inputs":{"outputCodec":"h264","hardwareType":"nvenc","hardwareEncoding":"true","hardwareDecoding":"false","forceEncoding":"true","ffmpegPresetEnabled":"true","ffmpegPreset":"fast","ffmpegQualityEnabled":"true","ffmpegQuality":"20"},"inputsDB":{"outputCodec":"h264","hardwareType":"nvenc","hardwareEncoding":"true","hardwareDecoding":"false","forceEncoding":"true","ffmpegPresetEnabled":"true","ffmpegPreset":"fast","ffmpegQualityEnabled":"true","ffmpegQuality":"20"},"position":{"y":460,"x":200},"pluginName":"ffmpegCommandSetVideoEncoder","version":"1.0.0"},{"id":"n_hevc_pix","sourceRepo":"Community","inputs":{"inputArguments":"","outputArguments":"-pix_fmt yuv420p"},"inputsDB":{"inputArguments":"","outputArguments":"-pix_fmt yuv420p"},"position":{"y":600,"x":200},"pluginName":"ffmpegCommandCustomArguments","version":"1.0.0"},{"id":"n_hevc_aac_en","sourceRepo":"Community","inputs":{"audioEncoder":"aac","language":"en","channels":"2","enableBitrate":"true","bitrate":"192k","enableSamplerate":"false","samplerate":"48k"},"inputsDB":{"audioEncoder":"aac","language":"en","channels":"2","enableBitrate":"true","bitrate":"192k","enableSamplerate":"false","samplerate":"48k"},"position":{"y":740,"x":200},"pluginName":"ffmpegCommandEnsureAudioStream","version":"1.0.0"},{"id":"n_hevc_aac_ja","sourceRepo":"Community","inputs":{"audioEncoder":"aac","language":"j","channels":"2","enableBitrate":"true","bitrate":"192k","enableSamplerate":"false","samplerate":"48k"},"inputsDB":{"audioEncoder":"aac","language":"j","channels":"2","enableBitrate":"true","bitrate":"192k","enableSamplerate":"false","samplerate":"48k"},"position":{"y":880,"x":200},"pluginName":"ffmpegCommandEnsureAudioStream","version":"1.0.0"},{"id":"n_exec","sourceRepo":"Community","inputs":{},"inputsDB":{},"position":{"y":1020,"x":500},"pluginName":"ffmpegCommandExecute","version":"1.0.0"},{"id":"n_replace","sourceRepo":"Community","inputs":{},"inputsDB":{},"position":{"y":1160,"x":500},"pluginName":"replaceOriginalFile","version":"1.0.0"}],"flowEdges":[{"source":"n_input","target":"n_vcheck","id":"e01","targetHandle":null,"sourceHandle":"1"},{"source":"n_vcheck","target":"n_h264_start","id":"e02","targetHandle":null,"sourceHandle":"1"},{"source":"n_vcheck","target":"n_hevc_start","id":"e03","targetHandle":null,"sourceHandle":"2"},{"source":"n_h264_start","target":"n_h264_enc","id":"e04","targetHandle":null,"sourceHandle":"1"},{"source":"n_h264_enc","target":"n_h264_aac_en","id":"e05","targetHandle":null,"sourceHandle":"1"},{"source":"n_h264_aac_en","target":"n_h264_aac_ja","id":"e06","targetHandle":null,"sourceHandle":"1"},{"source":"n_h264_aac_ja","target":"n_exec","id":"e07","targetHandle":null,"sourceHandle":"1"},{"source":"n_hevc_start","target":"n_hevc_enc","id":"e08","targetHandle":null,"sourceHandle":"1"},{"source":"n_hevc_enc","target":"n_hevc_pix","id":"e09","targetHandle":null,"sourceHandle":"1"},{"source":"n_hevc_pix","target":"n_hevc_aac_en","id":"e10","targetHandle":null,"sourceHandle":"1"},{"source":"n_hevc_aac_en","target":"n_hevc_aac_ja","id":"e11","targetHandle":null,"sourceHandle":"1"},{"source":"n_hevc_aac_ja","target":"n_exec","id":"e12","targetHandle":null,"sourceHandle":"1"},{"source":"n_exec","target":"n_replace","id":"e13","targetHandle":null,"sourceHandle":"1"}],"isUiLocked":false}',
     timestamp = strftime('%s','now')*1000
 WHERE id = 'N7tOvfd6i';
 
@@ -62,55 +72,42 @@ SET json_data = json_set(json_data, '$.flowId', 'N7tOvfd6i'),
 
 DELETE FROM flowsjsondb WHERE id = 'AddAACH264x';
 
-SELECT 'flow:', id, json_extract(json_data,'$.name') FROM flowsjsondb;
-SELECT 'lib:', id, json_extract(json_data,'$.flowId') FROM librarysettingsjsondb;
+UPDATE filejsondb
+SET json_data = json_set(json_data, '$.TranscodeDecisionMaker', '', '$.lastTranscodeDate', 0)
+WHERE json_extract(json_data,'$.TranscodeDecisionMaker') != '';
+
+SELECT 'Files reset: ' || changes();
+SELECT 'flow: ' || id || '  ' || json_extract(json_data,'$.name') FROM flowsjsondb;
+SELECT 'lib:  ' || id || '  flowId=' || json_extract(json_data,'$.flowId') FROM librarysettingsjsondb;
 '@, [System.Text.UTF8Encoding]::new($false))
 
 & $sqlite3 $db ".read $env:TEMP\restore.sql"
 Write-Host "  Done" -ForegroundColor Green
 
 # -- Step 4: Start Tdarr ------------------------------------------------------
-Write-Host "[4/6] Starting Tdarr..." -ForegroundColor Cyan
+Write-Host "[4/5] Starting Tdarr..." -ForegroundColor Cyan
 docker compose -f $ComposeFile start tdarr 2>&1 | Out-Null
 Start-Sleep -Seconds 12
 Write-Host "  Started" -ForegroundColor Green
 
-# -- Step 5: Reset all files that need reprocessing ---------------------------
-# Resets:
-#   - "Not required" -- was skipped by AddAACH264x (HEVC, AV1, etc.)
-#   - "Transcode error" -- failed jobs that need a retry
-# Does NOT reset "Transcode success" (H264+AAC from Phase 1 are already correct).
-Write-Host "[5/6] Resetting files for re-processing..." -ForegroundColor Cyan
-
-[System.IO.File]::WriteAllText("$env:TEMP\getids.sql", @'
-SELECT json_extract(json_data,'$._id')
-FROM filejsondb
-WHERE json_extract(json_data,'$.TranscodeDecisionMaker') IN ('Not required','Transcode error');
-'@, [System.Text.UTF8Encoding]::new($false))
-
-$resetIds = & $sqlite3 $db ".read $env:TEMP\getids.sql"
-Write-Host "  Found $($resetIds.Count) files to reset" -ForegroundColor Gray
-
-if ($resetIds.Count -gt 0) {
-    $idsJson = ($resetIds | ForEach-Object { '"' + $_.Replace('"','\"') + '"' }) -join ","
-    $body = "{`"data`":{`"fileIds`":[$idsJson],`"updatedObj`":{`"TranscodeDecisionMaker`":`"`",`"lastTranscodeDate`":0}}}"
-    $r = Invoke-RestMethod -Method Post "$Tdarr/api/v2/bulk-update-files" -Body $body -ContentType "application/json"
-    Write-Host "  Reset complete: $($r | ConvertTo-Json -Compress)" -ForegroundColor Green
-} else {
-    Write-Host "  No files to reset" -ForegroundColor Yellow
-}
-
-# -- Step 6: Trigger fresh scan -----------------------------------------------
-Write-Host "[6/6] Triggering fresh scan on both libraries..." -ForegroundColor Cyan
-foreach ($lib in @(@{id="rUP5cniqB";path="/data/movies"}, @{id="nw7PJBmiV";path="/data/tv"})) {
+# -- Step 5: Trigger fresh scan on both libraries -----------------------------
+Write-Host "[5/5] Triggering fresh scans..." -ForegroundColor Cyan
+foreach ($lib in @(
+    @{ id = "rUP5cniqB"; path = "/data/movies" },
+    @{ id = "nw7PJBmiV"; path = "/data/tv"     }
+)) {
     $body = "{`"data`":{`"dbID`":`"$($lib.id)`",`"mode`":`"scanFresh`",`"scanConfig`":{`"dbID`":`"$($lib.id)`",`"mode`":`"scanFresh`",`"arrayOrPath`":`"$($lib.path)`"}}}"
     Invoke-RestMethod -Method Post "$Tdarr/api/v2/scan-files" -Body $body -ContentType "application/json" | Out-Null
     Write-Host "  Scan triggered: $($lib.path)" -ForegroundColor Green
 }
 
 Write-Host ""
-Write-Host "Phase 2 complete." -ForegroundColor Cyan
-Write-Host "  - Main flow upgraded to Universal H264+AAC (handles HEVC, H264, AV1, anything)" -ForegroundColor Cyan
-Write-Host "  - HEVC files reset and queued for conversion" -ForegroundColor Cyan
-Write-Host "  - H264+AAC files will be skipped (Not required) - no duplicate tracks" -ForegroundColor Cyan
+Write-Host "Done." -ForegroundColor Cyan
+Write-Host "  Flow:    Universal H264+AAC (2-branch, EnsureAudioStream, no index conflicts)" -ForegroundColor Cyan
 Write-Host "  Monitor: http://localhost:8265" -ForegroundColor Yellow
+Write-Host ""
+Write-Host "  Expected behaviour:" -ForegroundColor Gray
+Write-Host "    H264 + AAC already       -> Not required (no processing)" -ForegroundColor Gray
+Write-Host "    H264 + no AAC            -> copy video, add AAC stereo" -ForegroundColor Gray
+Write-Host "    HEVC/AV1/other + AAC     -> GPU encode to H264, keep audio" -ForegroundColor Gray
+Write-Host "    HEVC/AV1/other + no AAC  -> GPU encode to H264, add AAC stereo" -ForegroundColor Gray
