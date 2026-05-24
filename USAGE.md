@@ -1,6 +1,6 @@
 # Media Stack — Usage Guide
 
-How to use the stack day-to-day. For setup, troubleshooting, and infrastructure details see `README.md`.
+How to use the stack day-to-day. For setup, troubleshooting, and infrastructure details see `RUNBOOK.md`.
 
 ---
 

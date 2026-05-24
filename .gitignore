@@ -9,6 +9,12 @@ config/
 # Media files
 data/
 
+# Config backups (can be large zips — store externally, not in git)
+backups/
+
+# Diagnostic / temp scripts (prefixed _ by convention)
+scripts/_*
+
 # Windows
 Thumbs.db
 desktop.ini
