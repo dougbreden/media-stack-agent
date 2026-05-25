@@ -3,8 +3,7 @@
     Deploy the Universal H264+AAC flow and re-queue the entire library.
 
 .DESCRIPTION
-    Run this AFTER tdarr-dedup-aac.ps1 (which removes Phase 1 duplicate AAC tracks
-    and leaves Tdarr stopped).
+    Run this after any needed duplicate-audio cleanup with dedup-audio.ps1.
 
     What it does:
       1. Stops Tdarr (no-op if already stopped by dedup script)

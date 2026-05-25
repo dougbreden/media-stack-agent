@@ -632,7 +632,7 @@ SONARR_API_KEY=<sonarr api key — fill in after step 4>
    cd M:\Media
    docker compose up -d
    ```
-4. Verify all 12 containers are running:
+4. Verify all 13 containers are running:
    ```powershell
    docker compose ps
    ```
@@ -1359,7 +1359,7 @@ These scripts live in `M:\Media\scripts\` and handle tasks not covered by automa
 M:\Media\scripts\library-report.ps1
 
 # Force full re-probe ignoring cache
-M:\Media\scripts\library-report.ps1 -NoCache
+M:\Media\scripts\library-report.ps1 -ClearCache
 ```
 
 Cache lives at `M:\Media\library-report-cache.json` — excluded from git. First run on a large library takes 10–20 minutes; subsequent runs finish in seconds.
@@ -1506,7 +1506,7 @@ This creates `M:\Media\backups\config-backup-YYYY-MM-DD_HHMM.zip` (~500 MB compr
    cd M:\Media
    docker compose up -d
    ```
-   All 12 containers start with their existing databases and configuration.
+   All 13 containers start with their existing databases and configuration.
 
 6. **Set up firewall and auto-start (run as Administrator):**
    ```powershell

@@ -1,6 +1,6 @@
 # CLAUDE.md — Self-Hosted Media Stack
 
-This is a fully automated self-hosted media pipeline at `M:\Media` running 12 Docker containers on Windows with Docker Desktop (WSL2 backend). See `RUNBOOK.md` for the full human-readable runbook, `LOG.md` for operational history, and `USAGE.md` for end-user instructions. This file is for Claude Code context.
+This is a fully automated self-hosted media pipeline at `M:\Media` running 13 Docker containers on Windows with Docker Desktop (WSL2 backend). See `RUNBOOK.md` for the full human-readable runbook, `LOG.md` for operational history, and `USAGE.md` for end-user instructions. This file is for Claude Code context.
 
 **User workflow:** Request in Jellyseerr → Sonarr/Radarr search → qBittorrent downloads (through Mullvad VPN) → imported and organised → appears in Jellyfin.
 
