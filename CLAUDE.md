@@ -137,6 +137,8 @@ docker compose up -d qbittorrent
 
 Tdarr runs background transcoding to standardise the entire library to H.264 video + AAC stereo audio for universal device compatibility. Server API is on port 8266, web UI on port 8265. Uses the same NVIDIA GPU passthrough as Jellyfin.
 
+Tdarr only mounts the mutable library paths (`/data/movies` and `/data/tv`), not `/data/torrents`. Keep it that way. For private trackers, the torrent download copy must remain pristine for seeding; Tdarr may replace the library copy in place, which breaks the hardlink and leaves the original torrent inode untouched. Helper scripts that modify media should default to library paths only.
+
 **Library IDs:**
 - Movies: `rUP5cniqB` (path `/data/movies`)
 - TV: `nw7PJBmiV` (path `/data/tv`)

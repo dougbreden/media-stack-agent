@@ -914,6 +914,8 @@ Both are mounted as volumes, so they survive container restarts and updates.
 
 Tdarr is a background transcoder that standardises the library to H.264 video + AAC stereo audio, making all content direct-play compatible on iOS without any server-side transcoding. The GPU handles video encodes (h264_nvenc, ~500+ fps for 1080p).
 
+**Private tracker safety:** Tdarr must only see the mutable media library (`/data/movies`, `/data/tv`), never `/data/torrents`. Private torrents need the original downloaded files to remain byte-for-byte pristine for long-term seeding. Radarr/Sonarr import by hardlink, so the library file initially shares an inode with the torrent file; Tdarr's `replaceOriginalFile` writes a new library copy and breaks that hardlink, leaving the torrent download path untouched.
+
 **Library IDs (needed for API calls and `tdarr-restore-hevc-flow.ps1`):**
 - Movies: `rUP5cniqB` (path `/data/movies`)
 - TV: `nw7PJBmiV` (path `/data/tv`)
@@ -1364,13 +1366,13 @@ M:\Media\scripts\library-report.ps1 -ClearCache
 
 Cache lives at `M:\Media\library-report-cache.json` — excluded from git. First run on a large library takes 10–20 minutes; subsequent runs finish in seconds.
 
-**`dedup-audio.ps1`** — Duplicate audio stream remover. Finds audio streams sharing the same codec, channel count, and language tag within a file and removes all but the first via fast copy remux (no re-encode). Catches any source of duplication: Tdarr flow bugs, manual ffmpeg mistakes, source Blu-ray mux errors.
+**`dedup-audio.ps1`** — Duplicate audio stream remover. Finds audio streams sharing the same codec, channel count, and language tag within a file and removes all but the first via fast copy remux (no re-encode). Catches any source of duplication: Tdarr flow bugs, manual ffmpeg mistakes, source Blu-ray mux errors. Defaults to library paths only (`M:\Media\data\movies`, `M:\Media\data\tv`, and optional 4K libraries) and refuses `M:\Media\data\torrents` unless `-AllowTorrentPaths` is explicitly supplied, so private tracker source files stay pristine.
 
 ```powershell
 # Preview what would be removed (no changes)
 M:\Media\scripts\dedup-audio.ps1 -DryRun
 
-# Fix all duplicates under M:\Media\data
+# Fix duplicates in library directories only
 M:\Media\scripts\dedup-audio.ps1
 
 # Fix a specific subtree
@@ -1523,4 +1525,3 @@ This creates `M:\Media\backups\config-backup-YYYY-MM-DD_HHMM.zip` (~500 MB compr
 ## Status Log
 
 See **[LOG.md](LOG.md)** for the full chronological record of setup decisions, fixes, and configuration changes.
-

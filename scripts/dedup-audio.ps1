@@ -1,13 +1,13 @@
 <#
 .SYNOPSIS
-    Detect and remove duplicate audio streams from all media files.
+    Detect and remove duplicate audio streams from library media files.
 
 .DESCRIPTION
-    Scans every media file under -MediaRoot and removes audio streams that are
-    exact duplicates of an earlier stream in the same file. A duplicate is
-    defined as two audio streams sharing the same codec, channel count, and
-    language tag. The stream with the lowest global index is kept; all later
-    matches are removed via fast copy remux (no re-encoding).
+    Scans media files under the configured library roots and removes audio
+    streams that are exact duplicates of an earlier stream in the same file.
+    A duplicate is defined as two audio streams sharing the same codec, channel
+    count, and language tag. The stream with the lowest global index is kept;
+    all later matches are removed via fast copy remux (no re-encoding).
 
     Catches any source of duplication: Tdarr flow bugs, manual ffmpeg mistakes,
     muxer errors, etc.
@@ -16,8 +16,19 @@
     Does not require Tdarr to be running or stopped.
 
 .PARAMETER MediaRoot
-    Root directory containing your media files.
-    Default: M:\Media\data
+    One or more library directories containing media files. Defaults to the
+    mutable library paths only:
+      M:\Media\data\movies
+      M:\Media\data\tv
+      M:\Media\data\movies-4k
+      M:\Media\data\tv-4k
+
+    The torrent download tree is blocked by default so private tracker source
+    files stay pristine.
+
+.PARAMETER AllowTorrentPaths
+    Allow scanning under M:\Media\data\torrents. Use only for deliberate manual
+    repair of non-seeding files; this can break private tracker torrents.
 
 .PARAMETER DryRun
     Report duplicates without making any changes to files.
@@ -26,16 +37,22 @@
     # Check what would be removed without touching anything
     .\dedup-audio.ps1 -DryRun
 
-    # Fix all duplicates
+    # Fix duplicates in library directories only
     .\dedup-audio.ps1
 
     # Fix a specific subtree
-    .\tdarr-dedup-aac.ps1 -MediaRoot "M:\Media\data\movies"
+    .\dedup-audio.ps1 -MediaRoot "M:\Media\data\movies"
 #>
 
 param(
-    [string]$MediaRoot = "M:\Media\data",
-    [switch]$DryRun
+    [string[]]$MediaRoot = @(
+        "M:\Media\data\movies",
+        "M:\Media\data\tv",
+        "M:\Media\data\movies-4k",
+        "M:\Media\data\tv-4k"
+    ),
+    [switch]$DryRun,
+    [switch]$AllowTorrentPaths
 )
 
 $ErrorActionPreference = "Continue"
@@ -44,11 +61,43 @@ if ($DryRun) {
     Write-Host "[DRY RUN] No files will be modified." -ForegroundColor Yellow
 }
 
+# -- Safety guard -------------------------------------------------------------
+$TorrentRoot = [System.IO.Path]::GetFullPath("M:\Media\data\torrents").TrimEnd("\") + "\"
+
+function Test-IsUnderPath([string]$Path, [string]$Root) {
+    $full = [System.IO.Path]::GetFullPath($Path).TrimEnd("\")
+    return ($full + "\").StartsWith($Root, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+if (-not $AllowTorrentPaths) {
+    foreach ($root in $MediaRoot) {
+        if (Test-IsUnderPath $root $TorrentRoot) {
+            Write-Host "ERROR: Refusing to scan torrent download path: $root" -ForegroundColor Red
+            Write-Host "Torrent files must stay pristine for seeding/private trackers." -ForegroundColor Red
+            Write-Host "Use library paths such as M:\Media\data\movies or pass -AllowTorrentPaths only for deliberate manual repair." -ForegroundColor Yellow
+            exit 1
+        }
+    }
+}
+
 # -- Discover media files -----------------------------------------------------
-Write-Host "Scanning $MediaRoot for media files..." -ForegroundColor Cyan
+Write-Host "Scanning media files..." -ForegroundColor Cyan
 $extensions = "*.mkv", "*.mp4", "*.avi", "*.m4v", "*.ts", "*.mov"
-$allFiles   = $extensions | ForEach-Object { Get-ChildItem $MediaRoot -Recurse -Filter $_ -ErrorAction SilentlyContinue }
+$allFiles   = foreach ($root in $MediaRoot) {
+    if (Test-Path $root) {
+        Write-Host "  $root" -ForegroundColor Gray
+        $extensions | ForEach-Object { Get-ChildItem $root -Recurse -Filter $_ -ErrorAction SilentlyContinue }
+    }
+}
 $allFiles   = @($allFiles | Sort-Object FullName)
+if (-not $AllowTorrentPaths) {
+    $beforeFilter = $allFiles.Count
+    $allFiles = @($allFiles | Where-Object { -not (Test-IsUnderPath $_.FullName $TorrentRoot) })
+    $filtered = $beforeFilter - $allFiles.Count
+    if ($filtered -gt 0) {
+        Write-Host "  Skipped $filtered file(s) under M:\Media\data\torrents" -ForegroundColor Yellow
+    }
+}
 Write-Host "  Found $($allFiles.Count) files" -ForegroundColor Gray
 
 # Path helpers: Windows host <-> Jellyfin container (/data mount)
