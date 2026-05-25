@@ -139,9 +139,15 @@ Tdarr runs background transcoding to standardise the entire library to H.264 vid
 
 Tdarr only mounts the mutable library paths (`/data/movies` and `/data/tv`), not `/data/torrents`. Keep it that way. For private trackers, the torrent download copy must remain pristine for seeding; Tdarr may replace the library copy in place, which breaks the hardlink and leaves the original torrent inode untouched. Helper scripts that modify media should default to library paths only.
 
+Run `M:\Media\scripts\check-media-policy.ps1` after any compose, qBittorrent category, Tdarr, or library-layout change. It is read-only and validates the key boundary: torrents are source/archive, `/data/movies` + `/data/tv` are mutable Universal libraries, and future `/data/movies-4k` + `/data/tv-4k` are Premium direct-play libraries.
+
 **Library IDs:**
 - Movies: `rUP5cniqB` (path `/data/movies`)
 - TV: `nw7PJBmiV` (path `/data/tv`)
+
+`tdarr-deploy-universal-flow.ps1` must only assign the flow to these two Universal IDs and must not reset files. `tdarr-reset-universal-files.ps1` is the only script that requeues file decisions, defaults to errored files only, and requires `-All -ConfirmAll` for a full Universal reset. Do not bulk-update every `librarysettingsjsondb` row or every `filejsondb` row once Premium 4K libraries exist.
+
+MKV is the preferred container for both Universal and Premium layers. Existing library files can be migrated with `remux-library-to-mkv.ps1`, which is dry-run by default and uses stream copy only. Do not fold broad MKV migration into the Tdarr deploy script; it is a separate mutating operation and should remain explicit.
 
 **Flow ID:** `N7tOvfd6i` (name: "Universal H264+AAC") — stored in SQLite `flowsjsondb` table (NOT accessible via cruddb API — must edit SQLite directly with Tdarr stopped).
 

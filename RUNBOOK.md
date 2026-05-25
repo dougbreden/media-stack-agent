@@ -1354,7 +1354,13 @@ Install Tailscale on any other device, log in with the same account, and use:
 
 These scripts live in `M:\Media\scripts\` and handle tasks not covered by automatic processes.
 
-**`library-report.ps1`** — Library state report. Probes every media file via Jellyfin's bundled ffprobe, caches by file size + mtime, and reports per-library codec distribution, standardisation percentage, missing AAC count, and duplicate stream count. Run after Tdarr completes a processing pass to confirm the library is fully standardised.
+**`check-media-policy.ps1`** — Read-only guardrail check for the source/archive/library boundary. Verifies Tdarr only mounts universal mutable libraries, never `M:\Media\data\torrents` or future 4K premium libraries; also verifies private qBittorrent categories save under `/data/torrents`.
+
+```powershell
+M:\Media\scripts\check-media-policy.ps1
+```
+
+**`library-report.ps1`** — Library state report. Probes every media file via Jellyfin's bundled ffprobe, caches by file size + mtime, and reports per-library codec distribution, tier-standard status, missing AAC count for Universal libraries, and duplicate stream count. Universal libraries are checked as H.264 + AAC at 1080p-or-lower; Premium 4K libraries are checked as 4K HEVC + MKV.
 
 ```powershell
 # Report (read-only, no changes made)
@@ -1381,11 +1387,36 @@ M:\Media\scripts\dedup-audio.ps1 -MediaRoot "M:\Media\data\movies"
 
 Requires the Jellyfin container running (uses its bundled ffprobe and ffmpeg). Tdarr does not need to be stopped.
 
-**`tdarr-restore-hevc-flow.ps1`** — Redeploys the Universal H264+AAC flow to SQLite, resets all files to unprocessed state, and triggers scanFresh on both libraries. Run after a flow config change or if the Tdarr database is wiped.
+**`remux-library-to-mkv.ps1`** — Container-only MKV migration for mutable library files. Uses ffmpeg stream copy (`-map 0 -c copy`) and does not re-encode video, audio, or subtitles. Defaults to dry-run mode and Universal libraries only. Pass `-Apply` to modify files; pass `-IncludePremium4K` only when the Premium 4K libraries exist and you intentionally want MKV remux there too. It refuses `M:\Media\data\torrents` unless `-AllowTorrentPaths` is explicitly supplied.
 
 ```powershell
-M:\Media\scripts\tdarr-restore-hevc-flow.ps1
+# Preview non-MKV library files
+M:\Media\scripts\remux-library-to-mkv.ps1
+
+# Remux Universal library files to MKV
+M:\Media\scripts\remux-library-to-mkv.ps1 -Apply
 ```
+
+**`tdarr-deploy-universal-flow.ps1`** — Redeploys the Universal H264+AAC flow to SQLite, assigns it only to Movies and TV, starts Tdarr, and triggers scanFresh on those libraries. It intentionally scopes work to Tdarr library IDs `rUP5cniqB` (`/data/movies`) and `nw7PJBmiV` (`/data/tv`) so future Premium 4K libraries are not converted. It does **not** reset existing file decisions.
+
+```powershell
+M:\Media\scripts\tdarr-deploy-universal-flow.ps1
+```
+
+**`tdarr-reset-universal-files.ps1`** — Intentionally requeues Universal files after a flow change. Defaults to errored files only. A full Universal reset requires `-All -ConfirmAll`.
+
+```powershell
+# Safe default: only retry files currently marked Transcode error
+M:\Media\scripts\tdarr-reset-universal-files.ps1
+
+# Preview a full reset count without changing anything
+M:\Media\scripts\tdarr-reset-universal-files.ps1 -All -ConfirmAll -DryRun
+
+# Full Universal reset after a major flow change
+M:\Media\scripts\tdarr-reset-universal-files.ps1 -All -ConfirmAll
+```
+
+**`tdarr-restore-hevc-flow.ps1`** remains as a compatibility wrapper for the old name. It runs `tdarr-deploy-universal-flow.ps1` only and does not reset files.
 
 **`backup-config.ps1`** — Creates a timestamped zip of `M:\Media\config\` for migration or recovery. Run before any major change or migration.
 
