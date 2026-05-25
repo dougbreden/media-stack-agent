@@ -56,6 +56,7 @@ param(
 )
 
 $ErrorActionPreference = "Continue"
+$Docker = "docker.exe"
 
 if ($DryRun) {
     Write-Host "[DRY RUN] No files will be modified." -ForegroundColor Yellow
@@ -127,7 +128,7 @@ foreach ($file in $allFiles) {
     $probeArgs = @("exec", "jellyfin", "/usr/lib/jellyfin-ffmpeg/ffprobe",
         "-v", "quiet", "-print_format", "json", "-show_streams", "-select_streams", "a",
         $dockerPath)
-    $probeRaw = (& docker @probeArgs 2>$null) -join ""
+    $probeRaw = (& $Docker @probeArgs 2>$null) -join ""
 
     if (-not $probeRaw -or $probeRaw -notmatch '"streams"') {
         Write-Host "  SKIP (probe failed): $leaf" -ForegroundColor Yellow
@@ -191,7 +192,7 @@ foreach ($file in $allFiles) {
     }
     $ffmpegArgs += @("-c", "copy", $tempDockerPath)
 
-    & docker @ffmpegArgs 2>$null | Out-Null
+    & $Docker @ffmpegArgs 2>$null | Out-Null
 
     if ($LASTEXITCODE -ne 0) {
         Write-Host "    ERROR: ffmpeg failed (exit $LASTEXITCODE)" -ForegroundColor Red
