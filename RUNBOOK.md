@@ -328,14 +328,19 @@ The iOS Jellyfin app is WebView-based and always uses HLS for video delivery on 
 
 Practical consequence: every seek restarts the FFmpeg process at the new position, causing 2–4 seconds of blank screen before playback resumes. This is expected and cannot be tuned away without changing the app itself.
 
-Infuse Pro does true direct play (no FFmpeg step), making seeking near-instant — worth considering if seek lag is disruptive.
-
 **Do not set Jellyfin LAN Networks or Known Proxies** to try to fix remote playback in this Docker setup. Docker's port proxy makes every connection (local and remote) appear to arrive from `172.18.0.1` (the Docker bridge gateway), so Jellyfin cannot distinguish local from cellular/Tailscale traffic and these settings have no effect.
 
 ### iOS: Mullvad and Tailscale cannot run simultaneously
 iOS only allows one VPN profile active at a time. If Mullvad is active, it captures all traffic including the `100.64.0.0/10` range that Tailscale uses for its mesh addresses. Symptoms: Tailscale shows "Connected" and `tailscale ping` succeeds, but every Tailscale IP (100.x.x.x) times out in the browser. No error message explains the conflict.
 
 Fix: disable Mullvad on the phone before connecting to any Tailscale address. Re-enable Mullvad when done.
+
+### Jellyfin "Allow encoding in HEVC format" causes GPU contention and cellular startup timeouts
+When "Allow encoding in HEVC format" is enabled, modern iPhones declare HEVC support in their client profile — Jellyfin then transcodes every H.264 source to HEVC via hevc_nvenc for every remote playback session, even when the source is already H.264 and could be remuxed directly.
+
+In this stack, Tdarr runs h264_nvenc jobs on the same GPU. Adding hevc_nvenc jobs from Jellyfin causes contention: the first HLS segment takes ~2 minutes to produce, exceeding Swiftfin's and Infuse's connection timeouts. The Jellyfin iOS app eventually starts after ~2 minutes; Safari plays slowly. This masks the root cause — it looks like a network or server reachability issue, not a codec setting.
+
+Fix: Dashboard → Playback → Transcoding → **uncheck "Allow encoding in HEVC format"** → Save → `docker compose restart jellyfin`. With it off, Jellyfin remuxes H.264 → HLS segments without any GPU encode; first segment ready in under a second. Config lives in `config/jellyfin/encoding.xml` (`<AllowHevcEncoding>false</AllowHevcEncoding>`).
 
 ### Jellyfin HLS breaks for files recently converted by Tdarr
 When Tdarr converts an HEVC file to H.264, Jellyfin's media database still records the old codec (HEVC). Until a library scan runs, any HLS streaming request causes Jellyfin to pass `-bsf:v hevc_mp4toannexb` to FFmpeg against an H.264 stream — FFmpeg immediately exits with code 234 ("Codec 'h264' is not supported by the bitstream filter 'hevc_mp4toannexb'"). Direct play (desktop browser, Swiftfin native player) is unaffected because it bypasses FFmpeg entirely.
@@ -827,7 +832,7 @@ First-run wizard:
 - Dashboard → **Playback** → **Transcoding**
 - Hardware acceleration: **NVENC (NVIDIA)**
 - Enable all available encode/decode format checkboxes (H.264, H.265/HEVC, AV1, etc.)
-- Check **"Allow encoding in HEVC format"** — without this, HEVC downloads get transcoded to h264, causing lag on devices that could otherwise direct-play HEVC
+- **Leave "Allow encoding in HEVC format" unchecked** — Tdarr converts all library content to H.264, so Jellyfin never needs to output HEVC. When this is enabled, iPhones (which declare HEVC support) cause Jellyfin to transcode H.264 → HEVC via hevc_nvenc, competing with Tdarr for the GPU and producing 2-minute HLS startup delays on cellular. With it disabled, Jellyfin remuxes H.264 directly to HLS segments in under a second.
 - Check **"Enable HDR tone mapping"** — required for HDR/HDR10 content to display correctly instead of washed out
 - Save
 
@@ -1333,12 +1338,11 @@ Install Tailscale on any other device, log in with the same account, and use:
 | Device | Jellyfin | Jellyseerr |
 |---|---|---|
 | Windows desktop | **Jellyfin Media Player** app (direct plays HEVC/h264 natively via MPV, no transcoding) | Browser or PWA (install from address bar) |
-| iPhone (recommended) | **Infuse** app (best iOS player — direct plays HEVC without lag, smooth HDR) | Add to Home Screen from browser (PWA) |
-| iPhone (Jellyfin native) | **Jellyfin** app from App Store — works, but set streaming quality to **Max** for HEVC content or it will transcode | Add to Home Screen from browser (PWA) |
+| iPhone | **Jellyfin** app from App Store — set Max Streaming Bitrate to **Original** in app settings | Add to Home Screen from browser (PWA) |
 | Android | **Jellyfin** app from Play Store | Add to Home Screen from browser (PWA) |
 | Browser | Works, but transcodes more formats — more GPU load on server | Fully supported |
 
-**Infuse vs Jellyfin iOS app:** Infuse direct-plays HEVC natively with zero lag and excellent HDR support. The Jellyfin iOS app can also direct-play HEVC but requires setting streaming bitrate to **Max** in the app settings, otherwise it transcodes and may lag. For subtitle control in Infuse, options are On / Forced Only / Off (no Smart mode); use **Forced Only** for English content and toggle manually for non-English. The Jellyfin iOS app respects the server's Smart subtitle setting.
+**Jellyfin iOS app:** Works on cellular via Tailscale with no subscription. With the library converted to H.264 and `AllowHevcEncoding=false`, Jellyfin remuxes video directly to HLS segments — playback starts in under a second on cellular. Set Max Streaming Bitrate → **Original** in the app (Settings gear) to prevent the app from requesting a lower-bitrate transcode. The app uses Smart subtitle mode matching the server setting. Seeking causes a 2–4 s blank screen (HLS seek restarts the remux from the new position — expected, not a bug).
 
 ---
 
