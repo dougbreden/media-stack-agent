@@ -10,7 +10,9 @@
       - Audio codec inventory and channel counts
       - Which files are missing an AAC track (not iOS-compatible without transcoding)
       - Which files have duplicate audio streams
-      - Overall standardization status (H264 + has AAC)
+      - Tier standard status:
+          Universal libraries: H264 + AAC, 1080p-or-lower
+          Premium 4K libraries: HEVC + MKV, 4K
 
     Results are cached so subsequent runs only re-probe files that have changed.
     First run probes every file via Jellyfin's ffprobe (may take several minutes
@@ -29,19 +31,20 @@
 param([switch]$ClearCache)
 
 $ErrorActionPreference = "Continue"
+$Docker = "docker.exe"
 
 $Libraries = @(
-    [PSCustomObject]@{ Name = "Movies";    Path = "M:\Media\data\movies"    },
-    [PSCustomObject]@{ Name = "TV Shows";  Path = "M:\Media\data\tv"        },
-    [PSCustomObject]@{ Name = "4K Movies"; Path = "M:\Media\data\movies-4k" },
-    [PSCustomObject]@{ Name = "4K TV";     Path = "M:\Media\data\tv-4k"     }
+    [PSCustomObject]@{ Name = "Movies";    Tier = "Universal"; Path = "M:\Media\data\movies"    },
+    [PSCustomObject]@{ Name = "TV Shows";  Tier = "Universal"; Path = "M:\Media\data\tv"        },
+    [PSCustomObject]@{ Name = "4K Movies"; Tier = "Premium4K";  Path = "M:\Media\data\movies-4k" },
+    [PSCustomObject]@{ Name = "4K TV";     Tier = "Premium4K";  Path = "M:\Media\data\tv-4k"     }
 )
 
 $CacheFile  = "M:\Media\library-report-cache.json"
 $Extensions = "*.mkv","*.mp4","*.avi","*.m4v","*.ts","*.mov"
 
 # -- Verify Jellyfin is reachable ---------------------------------------------
-$jellyfinCheck = & docker exec jellyfin echo "ok" 2>$null
+$jellyfinCheck = & $Docker exec jellyfin echo "ok" 2>$null
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: Jellyfin container not running. Start the stack first." -ForegroundColor Red
     exit 1
@@ -81,6 +84,23 @@ function Write-Sep([char]$c = '-', [int]$width = 72) {
     Write-Host ($c.ToString() * $width) -ForegroundColor DarkGray
 }
 
+function Test-LibraryStandard($entry, [string]$tier) {
+    if ($tier -eq "Premium4K") {
+        return ($entry.vcodec -eq "hevc" -and
+                $entry.container -eq "mkv" -and
+                [int]$entry.width -ge 3840)
+    }
+
+    return ($entry.vcodec -eq "h264" -and
+            $entry.has_aac -and
+            [int]$entry.width -le 1920)
+}
+
+function Get-StandardLabel([string]$tier) {
+    if ($tier -eq "Premium4K") { return "4K HEVC + MKV" }
+    return "H264 + AAC, <=1080p"
+}
+
 # -- Discover all files -------------------------------------------------------
 $allFiles = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
 foreach ($lib in $Libraries) {
@@ -118,7 +138,7 @@ foreach ($file in $allFiles) {
         "-v", "quiet", "-print_format", "json",
         "-show_entries", "stream=index,codec_name,codec_type,channels,width,height:stream_tags=language",
         $dockerPath)
-    $probeRaw = (& docker @probeArgs 2>$null) -join ""
+    $probeRaw = (& $Docker @probeArgs 2>$null) -join ""
 
     if (-not $probeRaw -or $probeRaw -notmatch '"streams"') { continue }
     $streams = ($probeRaw | ConvertFrom-Json).streams
@@ -167,7 +187,7 @@ foreach ($kv in $cache.GetEnumerator()) {
     [System.Text.UTF8Encoding]::new($false))
 
 # -- Build per-library data ---------------------------------------------------
-function Get-LibStats($libPath) {
+function Get-LibStats($libPath, $tier) {
     $keys   = $cache.Keys | Where-Object { $_ -like ($libPath -replace "\\", "/") + "/*" }
     $entries = @($keys | ForEach-Object { $cache[$_] })
     if ($entries.Count -eq 0) { return $null }
@@ -198,7 +218,8 @@ function Get-LibStats($libPath) {
     # Files missing AAC, with duplicates
     $missingAac  = @($entries | Where-Object { -not $_.has_aac })
     $hasDups     = @($entries | Where-Object { $_.has_dup })
-    $standardised = @($entries | Where-Object { $_.vcodec -eq "h264" -and $_.has_aac })
+    $standardised = @($entries | Where-Object { Test-LibraryStandard $_ $tier })
+    $nonMkv      = @($entries | Where-Object { $_.container -ne "mkv" })
 
     return [PSCustomObject]@{
         count        = $entries.Count
@@ -210,6 +231,7 @@ function Get-LibStats($libPath) {
         missingAac   = $missingAac
         hasDups      = $hasDups
         standardised = $standardised
+        nonMkv       = $nonMkv
     }
 }
 
@@ -227,7 +249,7 @@ $overallSize         = 0
 $overallStandardised = 0
 $overallMissingAac   = 0
 $overallDups         = 0
-$overallNonH264      = 0
+$overallOutOfTier    = 0
 
 foreach ($lib in $Libraries) {
     $libPathNorm = $lib.Path -replace "\\", "/"
@@ -240,7 +262,7 @@ foreach ($lib in $Libraries) {
         continue
     }
 
-    $s = Get-LibStats $lib.Path
+    $s = Get-LibStats $lib.Path $lib.Tier
     if (-not $s -or $s.count -eq 0) {
         Write-Host ("  {0,-12}  {1}  (empty)" -f $lib.Name.ToUpper(), $lib.Path) -ForegroundColor DarkGray
         Write-Host ""
@@ -250,12 +272,15 @@ foreach ($lib in $Libraries) {
     $overallTotal        += $s.count
     $overallSize         += $s.totalSize
     $overallStandardised += $s.standardised.Count
-    $overallMissingAac   += $s.missingAac.Count
+    if ($lib.Tier -eq "Universal") {
+        $overallMissingAac += $s.missingAac.Count
+    }
     $overallDups         += $s.hasDups.Count
-    $overallNonH264      += ($s.count - ($s.vcodecs | Where-Object { $_.name -eq "h264" } | Measure-Object count -Sum).Sum)
+    $overallOutOfTier    += ($s.count - $s.standardised.Count)
 
     Write-Host ("  {0}  |  {1} files  |  {2}" -f `
         $lib.Name.ToUpper(), $s.count, (Format-Size $s.totalSize)) -ForegroundColor White
+    Write-Host ("  Tier: {0} ({1})" -f $lib.Tier, (Get-StandardLabel $lib.Tier)) -ForegroundColor Gray
     Write-Host "  $($lib.Path)" -ForegroundColor DarkGray
     Write-Host ""
 
@@ -293,19 +318,23 @@ foreach ($lib in $Libraries) {
 
     Write-Host ""
     Write-Host "  Audio Health" -ForegroundColor Cyan
-    $aacColor = if ($s.missingAac.Count -gt 0) { "Yellow" } else { "Green" }
     $dupColor = if ($s.hasDups.Count -gt 0) { "Yellow" } else { "Green" }
-    Write-Host ("    Has AAC (iOS-ok)  : {0} / {1}  {2}" -f `
-        ($s.count - $s.missingAac.Count), $s.count, (Format-Pct ($s.count - $s.missingAac.Count) $s.count))
-    Write-Host ("    Missing AAC       : {0}" -f $s.missingAac.Count) -ForegroundColor $aacColor
+    if ($lib.Tier -eq "Universal") {
+        $aacColor = if ($s.missingAac.Count -gt 0) { "Yellow" } else { "Green" }
+        Write-Host ("    Has AAC (iOS-ok)  : {0} / {1}  {2}" -f `
+            ($s.count - $s.missingAac.Count), $s.count, (Format-Pct ($s.count - $s.missingAac.Count) $s.count))
+        Write-Host ("    Missing AAC       : {0}" -f $s.missingAac.Count) -ForegroundColor $aacColor
+    } else {
+        Write-Host "    AAC not required  : Premium 4K is direct-play only" -ForegroundColor DarkGray
+    }
     Write-Host ("    Duplicate streams : {0}" -f $s.hasDups.Count) -ForegroundColor $dupColor
 
-    if ($s.missingAac.Count -gt 0 -and $s.missingAac.Count -le 20) {
+    if ($lib.Tier -eq "Universal" -and $s.missingAac.Count -gt 0 -and $s.missingAac.Count -le 20) {
         $missingPaths = $cache.Keys |
             Where-Object { $_ -like "$libPathNorm/*" -and -not $cache[$_].has_aac } |
             ForEach-Object { Split-Path ($_ -replace "/", "\") -Leaf }
         $missingPaths | Sort-Object | ForEach-Object { Write-Host "      - $_" -ForegroundColor Yellow }
-    } elseif ($s.missingAac.Count -gt 20) {
+    } elseif ($lib.Tier -eq "Universal" -and $s.missingAac.Count -gt 20) {
         Write-Host "      (run with -Verbose to list all)" -ForegroundColor DarkGray
     }
 
@@ -318,14 +347,20 @@ foreach ($lib in $Libraries) {
 
     # Standardisation
     Write-Host ""
-    Write-Host "  Standardisation (H264 + AAC)" -ForegroundColor Cyan
+    Write-Host ("  Tier Standard ({0})" -f (Get-StandardLabel $lib.Tier)) -ForegroundColor Cyan
     $stdColor = if ($s.standardised.Count -eq $s.count) { "Green" } else { "Yellow" }
-    Write-Host ("    Standardised : {0} / {1}  {2}" -f `
+    Write-Host ("    Matches      : {0} / {1}  {2}" -f `
         $s.standardised.Count, $s.count, (Format-Pct $s.standardised.Count $s.count)) -ForegroundColor $stdColor
     $needsConv = $s.count - $s.standardised.Count
     if ($needsConv -gt 0) {
-        Write-Host ("    Needs Tdarr  : {0} / {1}  {2}" -f `
+        $label = if ($lib.Tier -eq "Premium4K") { "Review" } else { "Needs Tdarr" }
+        Write-Host ("    {0,-12} : {1} / {2}  {3}" -f `
+            $label,
             $needsConv, $s.count, (Format-Pct $needsConv $s.count)) -ForegroundColor Yellow
+    }
+
+    if ($lib.Tier -eq "Universal" -and $s.nonMkv.Count -gt 0) {
+        Write-Host ("    Non-MKV      : {0}" -f $s.nonMkv.Count) -ForegroundColor Yellow
     }
 
     Write-Host ""
@@ -337,15 +372,15 @@ Write-Host "  OVERALL SUMMARY" -ForegroundColor Cyan
 Write-Sep '-' $W
 if ($overallTotal -gt 0) {
     Write-Host ("  Total files      : {0}  ({1})" -f $overallTotal, (Format-Size $overallSize))
-    Write-Host ("  Standardised     : {0} / {1}  {2}" -f `
+    Write-Host ("  Matches tier     : {0} / {1}  {2}" -f `
         $overallStandardised, $overallTotal, (Format-Pct $overallStandardised $overallTotal)) `
         -ForegroundColor $(if ($overallStandardised -eq $overallTotal) { "Green" } else { "Yellow" })
-    Write-Host ("  Missing AAC      : {0}" -f $overallMissingAac) `
+    Write-Host ("  Universal missing AAC : {0}" -f $overallMissingAac) `
         -ForegroundColor $(if ($overallMissingAac -eq 0) { "Green" } else { "Yellow" })
     Write-Host ("  Duplicate audio  : {0}" -f $overallDups) `
         -ForegroundColor $(if ($overallDups -eq 0) { "Green" } else { "Yellow" })
-    Write-Host ("  Non-H264 video   : {0}" -f $overallNonH264) `
-        -ForegroundColor $(if ($overallNonH264 -eq 0) { "Green" } else { "Yellow" })
+    Write-Host ("  Out of tier      : {0}" -f $overallOutOfTier) `
+        -ForegroundColor $(if ($overallOutOfTier -eq 0) { "Green" } else { "Yellow" })
 } else {
     Write-Host "  No media files found in any library." -ForegroundColor Yellow
 }
