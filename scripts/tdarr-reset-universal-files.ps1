@@ -105,7 +105,10 @@ if ($count -eq 0) {
 
 Write-Host ""
 Write-Host "Stopping Tdarr..." -ForegroundColor Cyan
-& $Docker compose -f $ComposeFile stop tdarr 2>&1 | Out-Null
+$stopOut = & $Docker compose -f $ComposeFile stop tdarr 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  WARNING: docker compose stop returned exit $LASTEXITCODE (continuing)" -ForegroundColor DarkYellow
+}
 
 $sqlFile = "$env:TEMP\tdarr-reset-universal.sql"
 [System.IO.File]::WriteAllText($sqlFile, @"
@@ -121,6 +124,9 @@ try {
 } finally {
     Write-Host "Starting Tdarr..." -ForegroundColor Cyan
     & $Docker compose -f $ComposeFile start tdarr 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  WARNING: docker compose start returned exit $LASTEXITCODE" -ForegroundColor DarkYellow
+    }
 }
 
 Start-Sleep -Seconds 12

@@ -153,8 +153,28 @@ try {
     Write-Warn "check-downloads.ps1 failed: $_"
 }
 
-# -- 5. Firewall check (admin only) -------------------------------------------
-Write-Host "`n[5/5] Firewall rules..." -ForegroundColor Cyan
+# -- 5. Library standardization (weekly) --------------------------------------
+Write-Host "`n[5/6] Library standardization (weekly: remux + dedup + Tdarr scan)..." -ForegroundColor Cyan
+$stampFile = "$StackDir\.standardize-last-run"
+$runStandardize = $true
+if (Test-Path $stampFile) {
+    $lastRun = [datetime](Get-Content $stampFile -ErrorAction SilentlyContinue)
+    if ((Get-Date) - $lastRun -lt [TimeSpan]::FromDays(7)) {
+        Write-Host "  Last run: $($lastRun.ToString('yyyy-MM-dd HH:mm')) -- skipping (runs weekly)" -ForegroundColor Gray
+        $runStandardize = $false
+    }
+}
+if ($runStandardize) {
+    try {
+        & "$StackDir\scripts\standardize-library.ps1" 2>&1 | ForEach-Object { Write-Host "  $_" }
+        (Get-Date).ToString("o") | Set-Content $stampFile
+    } catch {
+        Write-Warn "standardize-library.ps1 failed: $_"
+    }
+}
+
+# -- 6. Firewall check (admin only) -------------------------------------------
+Write-Host "`n[6/6] Firewall rules..." -ForegroundColor Cyan
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
     [Security.Principal.WindowsBuiltinRole]::Administrator)
 

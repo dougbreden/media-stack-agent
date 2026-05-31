@@ -1438,7 +1438,17 @@ Runs automatically as step 4/5 in `check-stack.ps1`.
 
 **`backup-config.ps1`** — Creates a timestamped zip of `M:\Media\config\` for migration or recovery. Run before any major change or migration.
 
-**`check-stack.ps1`** — Quick health check and auto-repair: containers, VPN, qBittorrent lockfile, download health (via check-downloads.ps1), and firewall rules. Run any time something seems wrong. The scheduled startup task runs this on every boot.
+**`standardize-library.ps1`** — Ongoing library maintenance: runs dedup-audio, remux-library-to-mkv, and Tdarr scanFresh in the correct order. Safe to run repeatedly; each step skips files that already meet the standard. Wired into check-stack.ps1 and runs automatically once per week.
+
+```powershell
+# Full run (dedup + remux + Tdarr scan)
+M:\Media\scripts\standardize-library.ps1
+
+# Remux + scan only (faster routine check)
+M:\Media\scripts\standardize-library.ps1 -SkipDedup
+```
+
+**`check-stack.ps1`** — Quick health check and auto-repair: containers, VPN, qBittorrent lockfile, download health (via check-downloads.ps1), weekly library standardization (via standardize-library.ps1), and firewall rules. Run any time something seems wrong.
 
 **`setup-firewall.ps1`** — Disables Docker Desktop's blanket block rules and adds allow rules for all published ports. Must be run as Administrator. Re-run any time Docker Desktop updates and LAN/Tailscale access breaks.
 
