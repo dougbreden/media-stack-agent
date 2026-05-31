@@ -143,8 +143,18 @@ if ($qbHealth -eq "healthy") {
     }
 }
 
-# -- 4. Firewall check (admin only) -------------------------------------------
-Write-Host "`n[4/4] Firewall rules..." -ForegroundColor Cyan
+# -- 4. Download health check -------------------------------------------------
+Write-Host "`n[4/5] Download health (dead metaDL / dangerous files)..." -ForegroundColor Cyan
+try {
+    & "$StackDir\scripts\check-downloads.ps1" -DryRun:$false -MetaDLDeadHours 2 -StalledDeadHours 24 2>&1 |
+        Where-Object { $_ -notmatch "^\[DRY RUN\]" } |
+        ForEach-Object { Write-Host "  $_" }
+} catch {
+    Write-Warn "check-downloads.ps1 failed: $_"
+}
+
+# -- 5. Firewall check (admin only) -------------------------------------------
+Write-Host "`n[5/5] Firewall rules..." -ForegroundColor Cyan
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
     [Security.Principal.WindowsBuiltinRole]::Administrator)
 

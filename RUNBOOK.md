@@ -1418,9 +1418,27 @@ M:\Media\scripts\tdarr-reset-universal-files.ps1 -All -ConfirmAll
 
 **`tdarr-restore-hevc-flow.ps1`** remains as a compatibility wrapper for the old name. It runs `tdarr-deploy-universal-flow.ps1` only and does not reset files.
 
+**`check-downloads.ps1`** — Detects and cleans up download problems that Radarr/Sonarr cannot see because qBittorrent mis-reports them as active. Three checks:
+
+1. **Dead metaDL** -- magnets with 0 seeds that have been stuck in "downloading metadata" for longer than `-MetaDLDeadHours` (default 2h). Removes from qBittorrent and blocklists in Radarr/Sonarr so they immediately re-search for a working release.
+2. **Dangerous files** -- `.exe`, `.bat`, `.cmd`, `.msi`, `.vbs`, `.jar`, `.scr` in the download directories. Always fake torrents. Deletes the file and blocklists the release.
+3. **Stalled at 0%** -- torrents that have been at 0% with 0 seeds for longer than `-StalledDeadHours` (default 24h). Reports only -- these may be seasonal (Christmas movies in off-season) -- a human should decide whether to delete and re-grab.
+
+```powershell
+# Check what would be cleaned (default dry-run)
+M:\Media\scripts\check-downloads.ps1
+
+# Apply fixes
+M:\Media\scripts\check-downloads.ps1 -DryRun:$false
+```
+
+Runs automatically as step 4/5 in `check-stack.ps1`.
+
+**Why this exists:** Radarr/Sonarr have `autoRedownloadFailed=true` and handle true failures automatically. The gap is metaDL state -- qBittorrent reports it as "downloading" so Radarr/Sonarr never see a failure. A malicious .exe also lands as a Sonarr warning (not error), so auto-redownload does not trigger.
+
 **`backup-config.ps1`** — Creates a timestamped zip of `M:\Media\config\` for migration or recovery. Run before any major change or migration.
 
-**`update.ps1`** — Comprehensive maintenance: pulls images, force-recreates Gluetun, verifies VPN tunnel, checks qBittorrent for errored torrents, triggers Jellyfin library scan, prunes old images. Run periodically or before a planned maintenance window.
+**`check-stack.ps1`** — Quick health check and auto-repair: containers, VPN, qBittorrent lockfile, download health (via check-downloads.ps1), and firewall rules. Run any time something seems wrong. The scheduled startup task runs this on every boot.
 
 **`setup-firewall.ps1`** — Disables Docker Desktop's blanket block rules and adds allow rules for all published ports. Must be run as Administrator. Re-run any time Docker Desktop updates and LAN/Tailscale access breaks.
 
