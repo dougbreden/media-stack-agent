@@ -114,7 +114,7 @@ services:
       - VPN_TYPE=wireguard
       - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY}
       - WIREGUARD_ADDRESSES=${WIREGUARD_ADDRESSES}
-      - SERVER_COUNTRIES=Netherlands
+      - SERVER_COUNTRIES=Sweden
       - TZ=America/Chicago
       - BLOCK_MALICIOUS=off
       - BLOCK_SURVEILLANCE=off

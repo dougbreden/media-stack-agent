@@ -272,6 +272,7 @@ content specifically requires Nyaa.si — SubsPlease and Erai-raws only publish 
 | Symptom | Likely Cause | Fix |
 |---|---|---|
 | qBittorrent trackers "Not Working" / "Operation not permitted" on ALL trackers | Gluetun firewall rules in bad state (often after Watchtower update) | `docker compose up -d --force-recreate gluetun && docker compose up -d qbittorrent` |
+| All torrent speeds zero, Gluetun unhealthy, tun0 TX>0 but RX=0 (handshake sent, no reply) | Mullvad account expired -- WireGuard handshake silently fails because Mullvad rejects the key | Renew Mullvad subscription at mullvad.net. Force-recreate gluetun after account is active. |
 | qBittorrent trackers "Not Working" / DNS resolution failures | Gluetun DNS set to DoT instead of plain | Check DNS config: must be plain not DoT |
 | Torrent "Errored", speed drops to 0 | Save path wrong (`/downloads/` instead of `/data/torrents/`) | Fix qBittorrent.conf paths, restart container |
 | Gluetun restart causes qBittorrent "no such container" | qBittorrent holds old Gluetun container ID | `docker compose up -d qbittorrent` after any Gluetun recreate |
