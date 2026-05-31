@@ -133,6 +133,7 @@ foreach ($file in $candidates) {
             "exec", "jellyfin", "/usr/lib/jellyfin-ffmpeg/ffmpeg",
             "-y", "-i", $dockerInput,
             "-map", "0",
+            "-map", "-0:d",          # exclude data streams (gpmd/timecode/bin_data -- not MKV-compatible)
             "-c", "copy",
             $dockerTemp
         )
