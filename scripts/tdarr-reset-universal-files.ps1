@@ -34,7 +34,7 @@ param(
     [switch]$DryRun
 )
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
 
 $StackDir    = "M:\Media"
 $ComposeFile = "$StackDir\docker-compose.yml"
