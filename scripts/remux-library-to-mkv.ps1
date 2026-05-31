@@ -114,7 +114,7 @@ foreach ($file in $candidates) {
     Write-Progress -Activity "Remux to MKV" -Status "$checked/$($candidates.Count): $($file.Name)" -PercentComplete $pct
 
     $target = [System.IO.Path]::ChangeExtension($file.FullName, ".mkv")
-    if (Test-Path $target) {
+    if (Test-Path -LiteralPath $target) {
         Write-Host "  SKIP target exists: $target" -ForegroundColor Yellow
         $skipped++
         continue
@@ -127,25 +127,28 @@ foreach ($file in $candidates) {
     $dockerTemp = ConvertTo-DockerPath ([System.IO.Path]::ChangeExtension($file.FullName, ".remuxing.mkv"))
     $winTemp = ConvertTo-WinPath $dockerTemp
 
-    $ffmpegArgs = @(
-        "exec", "jellyfin", "/usr/lib/jellyfin-ffmpeg/ffmpeg",
-        "-y", "-i", $dockerInput,
-        "-map", "0",
-        "-c", "copy",
-        $dockerTemp
-    )
+    # If a valid temp file already exists from a previous run, skip ffmpeg
+    if (-not (Test-Path -LiteralPath $winTemp)) {
+        $ffmpegArgs = @(
+            "exec", "jellyfin", "/usr/lib/jellyfin-ffmpeg/ffmpeg",
+            "-y", "-i", $dockerInput,
+            "-map", "0",
+            "-c", "copy",
+            $dockerTemp
+        )
+        & $Docker @ffmpegArgs 2>$null | Out-Null
+    }
 
-    & $Docker @ffmpegArgs 2>$null | Out-Null
-    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $winTemp)) {
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $winTemp)) {
         Write-Host "    ERROR: ffmpeg remux failed" -ForegroundColor Red
-        Remove-Item $winTemp -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $winTemp -ErrorAction SilentlyContinue
         $failed += $file.FullName
         continue
     }
 
     try {
-        Move-Item $winTemp $target -Force -ErrorAction Stop
-        Remove-Item $file.FullName -Force -ErrorAction Stop
+        Move-Item -LiteralPath $winTemp -Destination $target -Force -ErrorAction Stop
+        Remove-Item -LiteralPath $file.FullName -Force -ErrorAction Stop
         Write-Host "    REMUXED: $target" -ForegroundColor Green
         $remuxed++
     } catch {
