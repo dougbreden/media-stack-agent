@@ -85,29 +85,15 @@ $vpnCheck = docker exec gluetun wget -qO- https://am.i.mullvad.net/connected 2>&
 if ($vpnCheck -match "You are connected to Mullvad") {
     Write-OK "VPN connected - $vpnCheck"
 } else {
-    Write-Fix "VPN not connected ($vpnCheck) - force-recreating gluetun..."
+    Write-Fix "VPN not connected - running fix-vpn.ps1..."
+    & "$StackDir\scripts\fix-vpn.ps1"
 
-    docker compose -f $ComposeFile stop qbittorrent 2>&1 | Out-Null
-
-    Remove-Item "$StackDir\config\qbittorrent\qBittorrent\lockfile"   -ErrorAction SilentlyContinue
-    Remove-Item "$StackDir\config\qbittorrent\qBittorrent\ipc-socket" -ErrorAction SilentlyContinue
-
-    docker compose -f $ComposeFile up -d --force-recreate gluetun 2>&1 | Out-Null
-
-    Write-Host "    Waiting for Gluetun..." -ForegroundColor Gray
-    if (Wait-ContainerHealthy "gluetun" 60) {
-        $vpnCheck2 = docker exec gluetun wget -qO- https://am.i.mullvad.net/connected 2>&1
-        if ($vpnCheck2 -match "You are connected to Mullvad") {
-            Write-OK "VPN connected after repair"
-        } else {
-            Write-Fail "VPN still not connected after gluetun recreate - check: docker compose logs gluetun"
-        }
+    $vpnCheck2 = docker exec gluetun wget -qO- https://am.i.mullvad.net/connected 2>&1
+    if ($vpnCheck2 -match "You are connected to Mullvad") {
+        Write-OK "VPN connected after repair"
     } else {
-        Write-Fail "Gluetun did not become healthy - check: docker compose logs gluetun"
+        Write-Fail "VPN still not connected - check: docker compose logs gluetun"
     }
-
-    Write-Fix "Restarting qBittorrent against fresh gluetun..."
-    docker compose -f $ComposeFile up -d qbittorrent 2>&1 | Out-Null
 }
 
 # -- 3. qBittorrent repair ----------------------------------------------------

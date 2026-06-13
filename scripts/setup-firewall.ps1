@@ -4,22 +4,20 @@
     Sets up Windows Firewall rules so phones, TVs, and Tailscale can reach the media stack.
 
 .DESCRIPTION
-    On Windows 11 with WSL2, Docker-published ports are forwarded by wslrelay.exe
-    (C:\Program Files\WSL\wslrelay.exe). Windows Firewall does not automatically
-    allow inbound connections to this process from non-local networks (Tailscale,
-    mobile data, etc.) unless explicitly permitted.
+    Docker-published ports are forwarded to WSL2 by a relay process. Which process
+    depends on the Windows version:
+      Windows 11: wslrelay.exe  (C:\Program Files\WSL\wslrelay.exe)
+      Windows 10: com.docker.backend.exe  (C:\Program Files\Docker\Docker\resources\)
 
-    This script:
-      1. Adds an application-level allow rule for wslrelay.exe (covers all ports,
-         all profiles -- the same thing Windows creates when you click Allow on
-         the firewall prompt)
-      2. Disables any Docker Desktop Backend block rules if they exist
-      3. Adds named port-specific allow rules as a redundant safety net
+    Windows Firewall does not automatically allow inbound connections from non-local
+    networks (Tailscale, mobile data) to these relay processes, so this script adds
+    explicit allow rules for whichever relay exists. It also disables any Docker Desktop
+    block rules and adds named port rules as a redundant safety net.
 
     Run this script:
-      - Once after a fresh Windows or WSL install
-      - Again if Docker/WSL updates and remote access stops working
-      - If Tailscale or LAN access to any service suddenly stops working
+      - Once after a fresh Windows or Docker install
+      - Again after Docker Desktop or Windows updates break remote access
+      - Any time Tailscale or LAN access to any service stops working
 
     Must be run as Administrator. Right-click PowerShell -> Run as Administrator, then:
         M:\Media\scripts\setup-firewall.ps1
@@ -30,29 +28,40 @@ $ErrorActionPreference = "Stop"
 Write-Host "Media Stack Firewall Setup" -ForegroundColor Cyan
 Write-Host "==========================" -ForegroundColor Cyan
 
-# -- Step 1: Allow wslrelay.exe (the actual WSL2 port proxy) ------------------
-# On Windows 11, Docker-published ports are owned by wslrelay.exe. Without this
-# rule, inbound connections from Tailscale and other non-local sources are blocked
-# even though the ports are bound to 0.0.0.0.
-Write-Host "`n[1/3] Adding allow rule for wslrelay.exe (WSL2 port relay)..."
+# -- Step 1: Allow the Docker port relay process (varies by Windows version) ---
+# Windows 11 uses wslrelay.exe; Windows 10 uses com.docker.backend.exe.
+# We add rules for whichever are present so the script works on both.
+Write-Host "`n[1/3] Adding allow rules for Docker port relay process(es)..."
 
-$wslRelayPath = "C:\Program Files\WSL\wslrelay.exe"
-$wslRuleName  = "Media Stack - WSL Relay (wslrelay.exe)"
+$relayProcesses = @(
+    @{ Path = "C:\Program Files\WSL\wslrelay.exe";
+       Name = "Media Stack - WSL Relay (wslrelay.exe)";
+       Desc = "Windows 11 WSL2 port relay -- forwards Docker-published ports to LAN/Tailscale" },
+    @{ Path = "C:\Program Files\Docker\Docker\resources\com.docker.backend.exe";
+       Name = "Media Stack - Docker Backend (com.docker.backend.exe)";
+       Desc = "Windows 10 Docker port relay -- forwards Docker-published ports to LAN/Tailscale" }
+)
 
-Remove-NetFirewallRule -DisplayName $wslRuleName -ErrorAction SilentlyContinue
-
-if (Test-Path $wslRelayPath) {
-    New-NetFirewallRule `
-        -DisplayName  $wslRuleName `
-        -Description  "Allows WSL2 relay to accept inbound connections from LAN and Tailscale for Docker-published ports" `
-        -Direction    Inbound `
-        -Action       Allow `
-        -Program      $wslRelayPath `
-        -Profile      Any `
-        -Enabled      True | Out-Null
-    Write-Host "  [OK] wslrelay.exe allow rule added" -ForegroundColor Green
-} else {
-    Write-Host "  [WARN] wslrelay.exe not found at $wslRelayPath" -ForegroundColor Yellow
+$relayFound = 0
+foreach ($relay in $relayProcesses) {
+    Remove-NetFirewallRule -DisplayName $relay.Name -ErrorAction SilentlyContinue
+    if (Test-Path $relay.Path) {
+        New-NetFirewallRule `
+            -DisplayName  $relay.Name `
+            -Description  $relay.Desc `
+            -Direction    Inbound `
+            -Action       Allow `
+            -Program      $relay.Path `
+            -Profile      Any `
+            -Enabled      True | Out-Null
+        Write-Host "  [OK] $($relay.Name)" -ForegroundColor Green
+        $relayFound++
+    } else {
+        Write-Host "  [--] Not present: $([System.IO.Path]::GetFileName($relay.Path))" -ForegroundColor Gray
+    }
+}
+if ($relayFound -eq 0) {
+    Write-Host "  [WARN] Neither relay process found -- port rules below are the only protection" -ForegroundColor Yellow
 }
 
 # -- Step 2: Disable Docker Desktop block rules if present --------------------

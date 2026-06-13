@@ -1,24 +1,49 @@
-# fix-vpn.ps1 — Run this when qBittorrent trackers show "Operation not permitted"
-# or "Host not found". Resets Gluetun iptables state and reconnects qBittorrent.
-#
-# Must be run from M:\Media or pass the -f flag to docker compose.
+<#
+.SYNOPSIS
+    Reset the Gluetun VPN and restart qBittorrent against the fresh container.
+
+.DESCRIPTION
+    Run this when qBittorrent trackers show "Operation not permitted", "Host not found",
+    or all speeds are zero. Gluetun's iptables killswitch can drift into a bad state
+    after Docker restarts, Windows hibernate/resume, or Watchtower updates.
+
+    Also called automatically by check-stack.ps1 when VPN is detected as broken.
+
+.EXAMPLE
+    .\fix-vpn.ps1
+#>
 
 $ErrorActionPreference = "Continue"
-$compose = "M:\Media\docker-compose.yml"
+$ComposeFile = "M:\Media\docker-compose.yml"
+$StackDir    = "M:\Media"
 
-Write-Host "Recreating Gluetun to reset VPN firewall state..."
-docker compose -f $compose up -d --force-recreate gluetun
-Start-Sleep -Seconds 8
+Write-Host "Fixing VPN (force-recreating Gluetun)..." -ForegroundColor Cyan
 
-Write-Host "Checking VPN connection..."
+docker compose -f $ComposeFile stop qbittorrent 2>&1 | Out-Null
+
+Remove-Item "$StackDir\config\qbittorrent\qBittorrent\lockfile"   -ErrorAction SilentlyContinue
+Remove-Item "$StackDir\config\qbittorrent\qBittorrent\ipc-socket" -ErrorAction SilentlyContinue
+
+docker compose -f $ComposeFile up -d --force-recreate gluetun 2>&1 | Out-Null
+
+# Wait for healthy (up to 60s)
+$elapsed = 0
+Write-Host "  Waiting for Gluetun to become healthy..." -ForegroundColor Gray
+while ($elapsed -lt 60) {
+    $health = docker inspect --format '{{.State.Health.Status}}' gluetun 2>&1
+    if ($health -eq "healthy") { break }
+    Start-Sleep 3
+    $elapsed += 3
+}
+
 $vpn = docker exec gluetun wget -qO- https://am.i.mullvad.net/connected 2>&1
-Write-Host $vpn
+if ($vpn -match "You are connected to Mullvad") {
+    Write-Host "  VPN connected: $vpn" -ForegroundColor Green
+} else {
+    Write-Host "  WARNING: VPN still not confirmed -- $vpn" -ForegroundColor Yellow
+    Write-Host "  Check: docker compose logs gluetun" -ForegroundColor Yellow
+}
 
-Write-Host "Cleaning stale qBittorrent lockfile..."
-Remove-Item -Path "M:\Media\config\qbittorrent\qBittorrent\lockfile" -ErrorAction SilentlyContinue
-Remove-Item -Path "M:\Media\config\qbittorrent\qBittorrent\ipc-socket" -ErrorAction SilentlyContinue
-
-Write-Host "Restarting qBittorrent..."
-docker compose -f $compose up -d --force-recreate qbittorrent
-
-Write-Host "Done. Give qBittorrent ~30 seconds to start, then check tracker status."
+docker compose -f $ComposeFile up -d qbittorrent 2>&1 | Out-Null
+Write-Host "  qBittorrent restarted against fresh Gluetun." -ForegroundColor Green
+Write-Host "Done. Allow ~30s for trackers to reconnect." -ForegroundColor Cyan
