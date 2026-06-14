@@ -201,7 +201,7 @@ foreach ($file in $allFiles) {
     }
 
     try {
-        Move-Item $winTemp $file.FullName -Force -ErrorAction Stop
+        Move-Item -LiteralPath $winTemp -Destination $file.FullName -Force -ErrorAction Stop
         Write-Host "    FIXED: $leaf" -ForegroundColor Green
         $fixed++
     } catch {

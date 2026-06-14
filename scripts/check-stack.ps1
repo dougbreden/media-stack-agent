@@ -145,8 +145,8 @@ $stampFile = "$StackDir\.standardize-last-run"
 $runStandardize = $true
 if (Test-Path $stampFile) {
     $lastRun = [datetime](Get-Content $stampFile -ErrorAction SilentlyContinue)
-    if ((Get-Date) - $lastRun -lt [TimeSpan]::FromDays(7)) {
-        Write-Host "  Last run: $($lastRun.ToString('yyyy-MM-dd HH:mm')) -- skipping (runs weekly)" -ForegroundColor Gray
+    if ((Get-Date) - $lastRun -lt [TimeSpan]::FromDays(1)) {
+        Write-Host "  Last run: $($lastRun.ToString('yyyy-MM-dd HH:mm')) -- skipping (runs daily)" -ForegroundColor Gray
         $runStandardize = $false
     }
 }
