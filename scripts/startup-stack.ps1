@@ -32,5 +32,9 @@ Remove-Item -Path "M:\Media\config\qbittorrent\qBittorrent\ipc-socket" -ErrorAct
 
 docker compose -f "M:\Media\docker-compose.yml" up -d qbittorrent
 
-# Refresh firewall after docker compose rebuilds its network bridge
-& "M:\Media\scripts\setup-firewall.ps1"
+# Refresh firewall if running elevated (requires admin; skipped otherwise)
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+    [Security.Principal.WindowsBuiltinRole]::Administrator)
+if ($isAdmin) {
+    & "M:\Media\scripts\setup-firewall.ps1"
+}

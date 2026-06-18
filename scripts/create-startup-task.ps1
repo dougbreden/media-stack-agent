@@ -1,4 +1,3 @@
-#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
     Registers a Windows scheduled task that starts the media stack on login.
@@ -42,7 +41,7 @@ $settings = New-ScheduledTaskSettingsSet `
 $principal = New-ScheduledTaskPrincipal `
     -UserId    $env:USERNAME `
     -LogonType Interactive `
-    -RunLevel  Highest
+    -RunLevel  Limited
 
 Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
 
@@ -80,7 +79,7 @@ $vpnSettings = New-ScheduledTaskSettingsSet `
 $vpnPrincipal = New-ScheduledTaskPrincipal `
     -UserId    $env:USERNAME `
     -LogonType Interactive `
-    -RunLevel  Highest
+    -RunLevel  Limited
 
 Unregister-ScheduledTask -TaskName $VpnResetTaskName -Confirm:$false -ErrorAction SilentlyContinue
 
