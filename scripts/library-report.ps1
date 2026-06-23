@@ -177,6 +177,17 @@ foreach ($file in $allFiles) {
 
 Write-Progress -Activity "Library Report" -Completed
 
+# -- Prune stale cache entries (files that no longer exist on disk) -----------
+$activeKeys = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+foreach ($file in $allFiles) {
+    $null = $activeKeys.Add(($file.FullName -replace "\\", "/"))
+}
+$staleKeys = @($cache.Keys | Where-Object { -not $activeKeys.Contains($_) })
+foreach ($k in $staleKeys) { $cache.Remove($k) }
+if ($staleKeys.Count -gt 0) {
+    Write-Host ("  Pruned {0} stale cache entries (deleted/moved files)" -f $staleKeys.Count) -ForegroundColor DarkGray
+}
+
 # -- Save cache ---------------------------------------------------------------
 $cacheOut = [PSCustomObject]@{}
 foreach ($kv in $cache.GetEnumerator()) {
@@ -241,7 +252,9 @@ Write-Host ""
 Write-Sep '=' $W
 Write-Host ("  MEDIA LIBRARY REPORT  --  " + (Get-Date -Format "yyyy-MM-dd HH:mm")) -ForegroundColor Cyan
 Write-Sep '=' $W
-Write-Host ("  Files: {0} total  |  Probed: {1} new  |  From cache: {2}" -f $totalFiles, $probed, $fromCache) -ForegroundColor Gray
+$headerLine = "  Files: {0} total  |  Probed: {1} new  |  From cache: {2}" -f $totalFiles, $probed, $fromCache
+if ($staleKeys.Count -gt 0) { $headerLine += "  |  Pruned stale: $($staleKeys.Count)" }
+Write-Host $headerLine -ForegroundColor Gray
 Write-Host ""
 
 $overallTotal        = 0
