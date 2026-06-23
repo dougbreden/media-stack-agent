@@ -46,10 +46,10 @@ param(
 
 $ErrorActionPreference = "Continue"
 
+. "$PSScriptRoot\config.ps1"
+
 $radarrBase = "http://localhost:7878"
 $sonarrBase = "http://localhost:8989"
-$radarrKey  = "ffe2d5d77df04128b2027ea05aa4bc86"
-$sonarrKey  = "ee46bcbfbdfe48e4b7863db24f6ecb25"
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan

@@ -9,10 +9,12 @@ This document is a **runbook** — everything needed to reproduce this setup fro
 
 ## Credentials
 
+Actual passwords and API keys are in `api-keys.md` (gitignored — never commit).
+
 | What | Value |
 |---|---|
 | All app web UI username | `admin` |
-| All app web UI password | `idbeholdg` |
+| All app web UI password | see `api-keys.md` |
 | WireGuard key name | REDACTED (created 2026-05-06) |
 | WireGuard key + assigned IP | Stored in `docker-compose.yml` under the `gluetun` service |
 | VPN server | Netherlands (Amsterdam) — switched from Singapore due to tracker IP blocking |
@@ -29,16 +31,16 @@ docker compose up -d gluetun
 
 | Service | Local | Via Tailscale | Credentials |
 |---|---|---|---|
-| **Jellyfin** (watch) | http://localhost:8096 | http://100.67.113.36:8096 | admin / idbeholdg |
-| **Jellyseerr** (request) | http://localhost:5055 | http://100.67.113.36:5055 | admin / idbeholdg |
-| **Homarr** (dashboard) | http://localhost:7575 | http://100.67.113.36:7575 | admin / !GeosaT@42 |
-| **Radarr** (movies) | http://localhost:7878 | http://100.67.113.36:7878 | admin / idbeholdg |
-| **Sonarr** (TV) | http://localhost:8989 | http://100.67.113.36:8989 | admin / idbeholdg |
-| **qBittorrent** (downloads) | http://localhost:8080 | http://100.67.113.36:8080 | admin / idbeholdg |
-| **Prowlarr** (indexers) | http://localhost:9696 | http://100.67.113.36:9696 | admin / idbeholdg |
-| **Bazarr** (subtitles) | http://localhost:6767 | http://100.67.113.36:6767 | admin / idbeholdg |
+| **Jellyfin** (watch) | http://localhost:8096 | http://<tailscale-ip>:8096 | admin / <password> |
+| **Jellyseerr** (request) | http://localhost:5055 | http://<tailscale-ip>:5055 | admin / <password> |
+| **Homarr** (dashboard) | http://localhost:7575 | http://<tailscale-ip>:7575 | admin / <password> |
+| **Radarr** (movies) | http://localhost:7878 | http://<tailscale-ip>:7878 | admin / <password> |
+| **Sonarr** (TV) | http://localhost:8989 | http://<tailscale-ip>:8989 | admin / <password> |
+| **qBittorrent** (downloads) | http://localhost:8080 | http://<tailscale-ip>:8080 | admin / <password> |
+| **Prowlarr** (indexers) | http://localhost:9696 | http://<tailscale-ip>:9696 | admin / <password> |
+| **Bazarr** (subtitles) | http://localhost:6767 | http://<tailscale-ip>:6767 | admin / <password> |
 | **FlareSolverr** | http://localhost:8191 | — | no UI |
-| **Tdarr** (transcoder) | http://localhost:8265 | http://100.67.113.36:8265 | admin / idbeholdg |
+| **Tdarr** (transcoder) | http://localhost:8265 | http://<tailscale-ip>:8265 | admin / <password> |
 | **Gluetun** (VPN) | — | — | no UI |
 | **Unpackerr** | — | — | no UI |
 | **Watchtower** | — | — | no UI |
@@ -698,7 +700,7 @@ In `categories.json` (alongside `qBittorrent.conf`):
 
 ### 2. Prowlarr — http://localhost:9696
 
-First-run: set up authentication → Forms / admin / `idbeholdg`
+First-run: set up authentication → Forms / admin / `<password>`
 
 **Add FlareSolverr proxy first — before any indexers:**
 - Settings → Indexers → Add Proxy → FlareSolverr
@@ -722,7 +724,7 @@ First-run: set up authentication → Forms / admin / `idbeholdg`
 
 ### 3. Radarr — http://localhost:7878
 
-First-run: set up authentication → Forms / admin / `idbeholdg`
+First-run: set up authentication → Forms / admin / `<password>`
 
 - Settings → **Media Management**:
   - Click **"Show Advanced"** toggle (top right of page) — this reveals the hardlinks option
@@ -754,7 +756,7 @@ First-run: set up authentication → Forms / admin / `idbeholdg`
 
 ### 4. Sonarr — http://localhost:8989
 
-First-run: set up authentication → Forms / admin / `idbeholdg`
+First-run: set up authentication → Forms / admin / `<password>`
 
 - Settings → **Media Management**:
   - Click **"Show Advanced"** toggle (top right of page)
@@ -798,7 +800,7 @@ Note: the placeholder `00000000000000000000000000000000` (32 zeros) is used befo
 
 ### 6. Bazarr — http://localhost:6767
 
-First-run: set up authentication → Forms / admin / `idbeholdg`
+First-run: set up authentication → Forms / admin / `<password>`
 
 - Settings → **Sonarr**:
   - Toggle enabled
@@ -821,7 +823,7 @@ First-run: set up authentication → Forms / admin / `idbeholdg`
 
 First-run wizard:
 - Set display language and server name
-- Create admin account: `admin` / `idbeholdg`
+- Create admin account: `admin` / `<password>`
 - Add media libraries:
   - Content type **Movies** → folder `/data/movies`
   - Content type **Shows** → folder `/data/tv`
@@ -848,9 +850,9 @@ If using the Jellyfin app on iPhone (Settings gear → Max Streaming Bitrate), s
 
 Or set via API:
 ```powershell
-$body = Invoke-RestMethod "http://localhost:8096/System/Configuration?api_key=f21e09ab3bc44eef9d50445aca69bf4e"
+$body = Invoke-RestMethod "http://localhost:8096/System/Configuration?api_key=<jellyfin-key>"
 $body.SubtitleMode = "Smart"
-Invoke-RestMethod -Method Post "http://localhost:8096/System/Configuration?api_key=f21e09ab3bc44eef9d50445aca69bf4e" -ContentType "application/json" -Body ($body | ConvertTo-Json -Depth 10)
+Invoke-RestMethod -Method Post "http://localhost:8096/System/Configuration?api_key=<jellyfin-key>" -ContentType "application/json" -Body ($body | ConvertTo-Json -Depth 10)
 ```
 
 **Set remote bitrate limit to unlimited:**
@@ -868,7 +870,7 @@ Note: The initial library scan after adding movies generates thumbnails and meta
 
 - Sign in with Jellyfin:
   - Jellyfin URL: `http://jellyfin:8096`
-  - Username: `admin`, Password: `idbeholdg`
+  - Username: `admin`, Password: `<password>`
 - Sync Jellyfin users → Continue
 - Confirm libraries detected → Continue
 - Add Radarr:
@@ -1325,15 +1327,15 @@ No changes needed in Radarr or Sonarr when adding a new indexer — Prowlarr han
 ## Accessing From Other Devices
 
 ### Local network (same WiFi)
-Replace `localhost` with the machine's local IP: `192.168.1.64`
-- Jellyfin: `http://192.168.1.64:8096`
-- Jellyseerr: `http://192.168.1.64:5055`
+Replace `localhost` with the machine's local IP: `<server-ip>`
+- Jellyfin: `http://<server-ip>:8096`
+- Jellyseerr: `http://<server-ip>:5055`
 
 ### Remote access (anywhere — Tailscale)
-Tailscale is installed on this machine (IP: `100.67.113.36`).
+Tailscale is installed on this machine (IP: `<tailscale-ip>`).
 Install Tailscale on any other device, log in with the same account, and use:
-- Jellyfin: `http://100.67.113.36:8096`
-- Jellyseerr: `http://100.67.113.36:5055`
+- Jellyfin: `http://<tailscale-ip>:8096`
+- Jellyseerr: `http://<tailscale-ip>:5055`
 
 ### Recommended clients
 

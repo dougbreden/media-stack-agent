@@ -1,0 +1,9 @@
+# scripts/config.ps1.example -- committed template, safe to push
+# Copy to scripts/config.ps1 (gitignored) and fill in values from api-keys.md
+
+$radarrKey     = "<radarr-api-key>"
+$sonarrKey     = "<sonarr-api-key>"
+$jellyfinKey   = "<jellyfin-api-key>"
+$jellyseerrKey = "<jellyseerr-api-key>"
+$qbUser        = "admin"
+$qbPassword    = "<qbittorrent-password>"

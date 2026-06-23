@@ -57,6 +57,8 @@ param(
 
 $ErrorActionPreference = "Continue"
 
+. "$PSScriptRoot\config.ps1"
+
 $ScriptName = "maintain-downloads"
 $LogDir  = "M:\Media\logs"
 $LogFile = "$LogDir\automation-$(Get-Date -Format 'yyyy-MM').log"
@@ -70,8 +72,6 @@ function Write-Log([string]$Msg, [string]$Level = "INFO") {
 $qbBase     = "http://localhost:8080"
 $radarrBase = "http://localhost:7878"
 $sonarrBase = "http://localhost:8989"
-$radarrKey  = "ffe2d5d77df04128b2027ea05aa4bc86"
-$sonarrKey  = "ee46bcbfbdfe48e4b7863db24f6ecb25"
 
 $dangerousExts = @(".exe", ".bat", ".cmd", ".msi", ".vbs", ".jar", ".scr", ".pif")
 $downloadPaths = @("M:\Media\data\torrents")
@@ -84,7 +84,7 @@ if ($DryRun) {
 $qbSession = New-Object Microsoft.PowerShell.Commands.WebRequestSession
 try {
     Invoke-RestMethod "$qbBase/api/v2/auth/login" -Method Post `
-        -Body "username=admin&password=idbeholdg" -WebSession $qbSession | Out-Null
+        -Body "username=$qbUser&password=$qbPassword" -WebSession $qbSession | Out-Null
 } catch {
     Write-Host "ERROR: Cannot reach qBittorrent at $qbBase" -ForegroundColor Red
     Write-Log "ERROR: Cannot reach qBittorrent" "FAIL"

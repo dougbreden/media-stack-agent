@@ -18,6 +18,9 @@ library-report-cache.json
 # Diagnostic / temp scripts (prefixed _ by convention)
 scripts/_*
 
+# Credentials config (actual values — never commit, see config.ps1.example)
+scripts/config.ps1
+
 # Runtime state (machine-specific, not source)
 .standardize-last-run
 logs/

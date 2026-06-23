@@ -22,17 +22,20 @@ This is a fully automated self-hosted media pipeline at `M:\Media` running 13 Do
 
 ## API Keys & Service URLs
 
+Actual keys and passwords are in `M:\Media\api-keys.md` (gitignored — never commit).
+Scripts load them via `. "$PSScriptRoot\config.ps1"` (also gitignored — see `scripts\config.ps1.example`).
+
 | Service | URL | API Key |
 |---|---|---|
-| Radarr (movies) | http://localhost:7878 | `ffe2d5d77df04128b2027ea05aa4bc86` |
-| Sonarr (TV) | http://localhost:8989 | `ee46bcbfbdfe48e4b7863db24f6ecb25` |
-| Jellyseerr (requests) | http://localhost:5055 | `4a6b7ee0cac2430eb4335fbf4c520593` |
-| Jellyfin (player) | http://localhost:8096 | `f21e09ab3bc44eef9d50445aca69bf4e` |
+| Radarr (movies) | http://localhost:7878 | see `api-keys.md` |
+| Sonarr (TV) | http://localhost:8989 | see `api-keys.md` |
+| Jellyseerr (requests) | http://localhost:5055 | see `api-keys.md` |
+| Jellyfin (player) | http://localhost:8096 | see `api-keys.md` |
 | Prowlarr (indexers) | http://localhost:9696 | — |
-| qBittorrent | http://localhost:8080 | admin / idbeholdg |
-| Homarr (dashboard) | http://localhost:7575 | admin / !GeosaT@42 |
-| Bazarr (subtitles) | http://localhost:6767 | admin / idbeholdg |
-| Tdarr (transcoder) | http://localhost:8265 | admin / idbeholdg |
+| qBittorrent | http://localhost:8080 | see `api-keys.md` |
+| Homarr (dashboard) | http://localhost:7575 | see `api-keys.md` |
+| Bazarr (subtitles) | http://localhost:6767 | see `api-keys.md` |
+| Tdarr (transcoder) | http://localhost:8265 | see `api-keys.md` |
 
 ---
 
@@ -219,29 +222,29 @@ Invoke-RestMethod -Method Post "http://localhost:8265/api/v2/bulk-update-files" 
 
 **Trigger Jellyfin library scan:**
 ```powershell
-Invoke-RestMethod -Method Post "http://localhost:8096/Library/Refresh?api_key=f21e09ab3bc44eef9d50445aca69bf4e"
+Invoke-RestMethod -Method Post "http://localhost:8096/Library/Refresh?api_key=<jellyfin-key>"
 ```
 
 **List Sonarr series with IDs:**
 ```powershell
-Invoke-RestMethod "http://localhost:8989/api/v3/series?apikey=ee46bcbfbdfe48e4b7863db24f6ecb25" | ForEach-Object { "$($_.id) $($_.title)" }
+Invoke-RestMethod "http://localhost:8989/api/v3/series?apikey=<sonarr-key>" | ForEach-Object { "$($_.id) $($_.title)" }
 ```
 
 **Season search (better than episode search for completed seasons on public trackers):**
 ```powershell
 $body = '{"name":"SeasonSearch","seriesId":2,"seasonNumber":1}'
-Invoke-RestMethod -Method Post "http://localhost:8989/api/v3/command?apikey=ee46bcbfbdfe48e4b7863db24f6ecb25" -Body $body -ContentType "application/json"
+Invoke-RestMethod -Method Post "http://localhost:8989/api/v3/command?apikey=<sonarr-key>" -Body $body -ContentType "application/json"
 ```
 
 **Check missing episodes:**
 ```powershell
-$eps = Invoke-RestMethod "http://localhost:8989/api/v3/episode?apikey=ee46bcbfbdfe48e4b7863db24f6ecb25&seriesId=2&seasonNumber=1"
+$eps = Invoke-RestMethod "http://localhost:8989/api/v3/episode?apikey=<sonarr-key>&seriesId=2&seasonNumber=1"
 $eps | Where-Object { -not $_.hasFile } | Sort-Object episodeNumber | ForEach-Object { "E$($_.episodeNumber): $($_.title)" }
 ```
 
 **Interactive release search (see scores and rejection reasons for a specific episode):**
 ```powershell
-$releases = Invoke-RestMethod "http://localhost:8989/api/v3/release?apikey=ee46bcbfbdfe48e4b7863db24f6ecb25&episodeId=<id>"
+$releases = Invoke-RestMethod "http://localhost:8989/api/v3/release?apikey=<sonarr-key>&episodeId=<id>"
 $releases | Sort-Object customFormatScore -Descending | Select-Object -First 10 | ForEach-Object {
     "$($_.customFormatScore) | rejected=$($_.rejected) | $($_.title.Substring(0,70))"
 }

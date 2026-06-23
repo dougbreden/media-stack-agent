@@ -18,6 +18,8 @@
 $ErrorActionPreference = "Continue"
 $StackDir    = "M:\Media"
 $ComposeFile = "$StackDir\docker-compose.yml"
+
+. "$StackDir\scripts\config.ps1"
 $Errors      = @()
 
 Set-Location $StackDir
@@ -107,7 +109,7 @@ if (Wait-ContainerHealthy "qbittorrent" 90) {
     try {
         $session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
         Invoke-WebRequest "http://localhost:8080/api/v2/auth/login" `
-            -Method Post -Body "username=admin&password=idbeholdg" `
+            -Method Post -Body "username=$qbUser&password=$qbPassword" `
             -ContentType "application/x-www-form-urlencoded" `
             -WebSession $session | Out-Null
         $torrents = Invoke-RestMethod "http://localhost:8080/api/v2/torrents/info" -WebSession $session
@@ -150,7 +152,7 @@ foreach ($c in $allContainers) {
 Write-Step 5 7 "Triggering Jellyfin library scan (clears stale codec metadata from Tdarr)..."
 try {
     Invoke-RestMethod -Method Post `
-        "http://localhost:8096/Library/Refresh?api_key=f21e09ab3bc44eef9d50445aca69bf4e" | Out-Null
+        "http://localhost:8096/Library/Refresh?api_key=$jellyfinKey" | Out-Null
     Write-OK "Library scan triggered (runs in background)"
 } catch {
     Write-Warn "Could not trigger Jellyfin scan: $_"
