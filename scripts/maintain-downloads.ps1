@@ -20,7 +20,8 @@
        Christmas movies in May) or truly dead -- a human should decide.
 
     Requires qBittorrent, Radarr, and Sonarr containers running.
-    Safe to run from update.ps1 or as a scheduled task. Dry-run by default.
+    Safe to run from maintain-stack.ps1 or as a scheduled task. Dry-run by default.
+    Output goes to console and M:\Media\logs\automation-YYYY-MM.log.
 
 .PARAMETER DryRun
     Report problems without making any changes. Default: true.
@@ -36,13 +37,16 @@
 
 .EXAMPLE
     # Check what would be cleaned (default dry-run)
-    .\check-downloads.ps1
+    .\maintain-downloads.ps1
 
     # Apply all fixes
-    .\check-downloads.ps1 -DryRun:$false
+    .\maintain-downloads.ps1 -DryRun:$false
 
     # Tighter threshold
-    .\check-downloads.ps1 -DryRun:$false -MetaDLDeadHours 1
+    .\maintain-downloads.ps1 -DryRun:$false -MetaDLDeadHours 1
+
+.NOTES
+    Replaces: check-downloads.ps1
 #>
 
 param(
@@ -52,6 +56,16 @@ param(
 )
 
 $ErrorActionPreference = "Continue"
+
+$ScriptName = "maintain-downloads"
+$LogDir  = "M:\Media\logs"
+$LogFile = "$LogDir\automation-$(Get-Date -Format 'yyyy-MM').log"
+$null    = New-Item -ItemType Directory -Force -Path $LogDir
+
+function Write-Log([string]$Msg, [string]$Level = "INFO") {
+    $line = "{0} | {1,-5} | {2,-22} | {3}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Level, $ScriptName, $Msg
+    [System.IO.File]::AppendAllText($LogFile, $line + [System.Environment]::NewLine, [System.Text.Encoding]::UTF8)
+}
 
 $qbBase     = "http://localhost:8080"
 $radarrBase = "http://localhost:7878"
@@ -73,6 +87,7 @@ try {
         -Body "username=admin&password=idbeholdg" -WebSession $qbSession | Out-Null
 } catch {
     Write-Host "ERROR: Cannot reach qBittorrent at $qbBase" -ForegroundColor Red
+    Write-Log "ERROR: Cannot reach qBittorrent" "FAIL"
     exit 1
 }
 
@@ -246,3 +261,5 @@ if ($DryRun -and ($deadMeta.Count -gt 0 -or $dangerousFound.Count -gt 0)) {
     Write-Host "  Re-run with -DryRun:`$false to apply fixes." -ForegroundColor Yellow
 }
 Write-Host "============================================" -ForegroundColor Cyan
+
+Write-Log "Dead metaDL: $($deadMeta.Count) cleaned | Dangerous: $($dangerousFound.Count) | Stalled: $($stalled.Count)" "INFO"

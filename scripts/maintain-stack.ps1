@@ -1,34 +1,53 @@
 <#
 .SYNOPSIS
-    Quick health check and auto-repair for the media stack.
+    Daily health check and auto-repair for the media stack.
 
 .DESCRIPTION
-    Faster than update.ps1 - no image pulling or updates.
-    Detects and fixes common failure patterns:
-      - Containers that have stopped -> docker compose up -d
-      - Gluetun VPN not connected    -> force-recreate gluetun
-      - qBittorrent unhealthy        -> clear lockfile + restart
-      - Firewall rules missing       -> re-apply (requires admin)
+    Run manually any time something seems wrong, or let the scheduled task
+    call it on boot. Steps:
+      1. Disk space check       -- warn/fail if M:\ is getting full
+      2. Container status       -- restart anything that stopped
+      3. VPN connectivity       -- force-recreate Gluetun if VPN is down
+      4. qBittorrent health     -- clear lockfile + restart if unhealthy
+      5. Download audit         -- dead metaDL, dangerous files (calls maintain-downloads.ps1)
+      6. Library standardization-- remux + dedup + Tdarr scan (daily gate)
+      7. Firewall rules         -- re-apply if missing (admin only)
 
-    Run this whenever something seems wrong with the stack.
+    Output goes to console and M:\Media\logs\automation-YYYY-MM.log.
     Does not require Administrator unless firewall repair is needed.
+
+.NOTES
+    Replaces: check-stack.ps1
 #>
 
 $ErrorActionPreference = "Continue"
 $StackDir    = "M:\Media"
 $ComposeFile = "$StackDir\docker-compose.yml"
+$ScriptName  = "maintain-stack"
 $Fixes       = @()
 $Issues      = @()
 
-function Write-OK   { param($msg) Write-Host "  OK   $msg" -ForegroundColor Green }
-function Write-Warn { param($msg) Write-Host "  WARN $msg" -ForegroundColor Yellow }
+# -- Logging -------------------------------------------------------------------
+$LogDir  = "$StackDir\logs"
+$LogFile = "$LogDir\automation-$(Get-Date -Format 'yyyy-MM').log"
+$null    = New-Item -ItemType Directory -Force -Path $LogDir
+
+function Write-Log([string]$Msg, [string]$Level = "INFO") {
+    $line = "{0} | {1,-5} | {2,-22} | {3}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Level, $ScriptName, $Msg
+    [System.IO.File]::AppendAllText($LogFile, $line + [System.Environment]::NewLine, [System.Text.Encoding]::UTF8)
+}
+
+function Write-OK   { param($msg) Write-Host "  OK   $msg" -ForegroundColor Green;  Write-Log "OK   $msg" "INFO" }
+function Write-Warn { param($msg) Write-Host "  WARN $msg" -ForegroundColor Yellow; Write-Log "WARN $msg" "WARN" }
 function Write-Fix  { param($msg)
     Write-Host "  FIX  $msg" -ForegroundColor Cyan
     $script:Fixes += $msg
+    Write-Log "FIX  $msg" "INFO"
 }
 function Write-Fail { param($msg)
     Write-Host "  FAIL $msg" -ForegroundColor Red
     $script:Issues += $msg
+    Write-Log "FAIL $msg" "FAIL"
 }
 
 function Wait-ContainerHealthy {
@@ -45,14 +64,32 @@ function Wait-ContainerHealthy {
     return $false
 }
 
+Write-Log "===== START =====" "INFO"
 Write-Host ""
 Write-Host "==========================================" -ForegroundColor Cyan
 Write-Host "  Media Stack Health Check" -ForegroundColor Cyan
 Write-Host "  $(Get-Date -Format 'yyyy-MM-dd HH:mm')" -ForegroundColor Cyan
 Write-Host "==========================================" -ForegroundColor Cyan
 
-# -- 1. Ensure all containers are running -------------------------------------
-Write-Host "`n[1/4] Container status..." -ForegroundColor Cyan
+# -- 1. Disk space check -------------------------------------------------------
+Write-Host "`n[1/7] Disk space..." -ForegroundColor Cyan
+try {
+    $drive   = Get-PSDrive M -ErrorAction Stop
+    $freeGB  = [math]::Round($drive.Free / 1GB, 1)
+    $totalGB = [math]::Round(($drive.Free + $drive.Used) / 1GB, 1)
+    if ($freeGB -lt 200) {
+        Write-Fail "M:\ only ${freeGB} GB free of ${totalGB} GB -- downloads and Tdarr cache will fail soon"
+    } elseif ($freeGB -lt 500) {
+        Write-Warn "M:\ ${freeGB} GB free of ${totalGB} GB -- below 500 GB threshold, plan expansion"
+    } else {
+        Write-OK "M:\ ${freeGB} GB free of ${totalGB} GB"
+    }
+} catch {
+    Write-Warn "Could not read disk space for M:\: $_"
+}
+
+# -- 2. Ensure all containers are running --------------------------------------
+Write-Host "`n[2/7] Container status..." -ForegroundColor Cyan
 $psRaw = docker compose -f $ComposeFile ps --format json 2>&1
 $containers = $psRaw | ForEach-Object {
     try { $_ | ConvertFrom-Json } catch { $null }
@@ -79,8 +116,8 @@ if ($anyDown) {
     docker compose -f $ComposeFile up -d 2>&1 | Out-Null
 }
 
-# -- 2. VPN check + gluetun repair --------------------------------------------
-Write-Host "`n[2/4] VPN connectivity..." -ForegroundColor Cyan
+# -- 3. VPN check + Gluetun repair --------------------------------------------
+Write-Host "`n[3/7] VPN connectivity..." -ForegroundColor Cyan
 $vpnCheck = docker exec gluetun wget -qO- https://am.i.mullvad.net/connected 2>&1
 if ($vpnCheck -match "You are connected to Mullvad") {
     Write-OK "VPN connected - $vpnCheck"
@@ -96,15 +133,15 @@ if ($vpnCheck -match "You are connected to Mullvad") {
     }
 }
 
-# -- 3. qBittorrent repair ----------------------------------------------------
-Write-Host "`n[3/4] qBittorrent health..." -ForegroundColor Cyan
-$qbHealth = docker inspect --format '{{.State.Health.Status}}' qbittorrent 2>&1
-$qbRunning = docker inspect --format '{{.State.Running}}' qbittorrent 2>&1
+# -- 4. qBittorrent repair -----------------------------------------------------
+Write-Host "`n[4/7] qBittorrent health..." -ForegroundColor Cyan
+$qbHealth  = docker inspect --format '{{.State.Health.Status}}' qbittorrent 2>&1
+$qbRunning = docker inspect --format '{{.State.Running}}'       qbittorrent 2>&1
 
 if ($qbHealth -eq "healthy") {
     Write-OK "qBittorrent - healthy"
 } elseif ($qbRunning -ne "true") {
-    Write-Fix "qBittorrent is not running - clearing lockfile and starting..."
+    Write-Fix "qBittorrent not running - clearing lockfile and starting..."
     Remove-Item "$StackDir\config\qbittorrent\qBittorrent\lockfile"   -ErrorAction SilentlyContinue
     Remove-Item "$StackDir\config\qbittorrent\qBittorrent\ipc-socket" -ErrorAction SilentlyContinue
     docker compose -f $ComposeFile up -d qbittorrent 2>&1 | Out-Null
@@ -115,7 +152,6 @@ if ($qbHealth -eq "healthy") {
         Write-Fail "qBittorrent still unhealthy - check: docker compose logs qbittorrent"
     }
 } else {
-    # Running but unhealthy - web UI not responding; clear lockfile and restart
     Write-Fix "qBittorrent running but unhealthy - clearing lockfile and restarting..."
     docker compose -f $ComposeFile stop qbittorrent 2>&1 | Out-Null
     Remove-Item "$StackDir\config\qbittorrent\qBittorrent\lockfile"   -ErrorAction SilentlyContinue
@@ -129,26 +165,31 @@ if ($qbHealth -eq "healthy") {
     }
 }
 
-# -- 4. Download health check -------------------------------------------------
-Write-Host "`n[4/5] Download health (dead metaDL / dangerous files)..." -ForegroundColor Cyan
+# -- 5. Download audit ---------------------------------------------------------
+Write-Host "`n[5/7] Download audit (dead metaDL / dangerous files)..." -ForegroundColor Cyan
 try {
-    & "$StackDir\scripts\check-downloads.ps1" -DryRun:$false -MetaDLDeadHours 2 -StalledDeadHours 24 2>&1 |
-        Where-Object { $_ -notmatch "^\[DRY RUN\]" } |
-        ForEach-Object { Write-Host "  $_" }
+    $dlOut = & "$StackDir\scripts\maintain-downloads.ps1" -DryRun:$false -MetaDLDeadHours 2 -StalledDeadHours 24 2>&1
+    $dlOut | Where-Object { $_ -notmatch "^\[DRY RUN\]" } | ForEach-Object { Write-Host "  $_" }
+    $cleaned  = ($dlOut | Where-Object { $_ -match "Dead metaDL cleaned\s+:" } | Select-Object -Last 1) -replace ".*:\s*", ""
+    $dangerous = ($dlOut | Where-Object { $_ -match "Dangerous files\s+:" } | Select-Object -Last 1) -replace ".*:\s*", ""
+    Write-Log "Downloads: ${cleaned} dead metaDL cleaned, ${dangerous} dangerous files" "INFO"
 } catch {
-    Write-Warn "check-downloads.ps1 failed: $_"
+    Write-Warn "maintain-downloads.ps1 failed: $_"
 }
 
-# -- 5. Library standardization (weekly) --------------------------------------
-Write-Host "`n[5/6] Library standardization (weekly: remux + dedup + Tdarr scan)..." -ForegroundColor Cyan
-$stampFile = "$StackDir\.standardize-last-run"
+# -- 6. Library standardization (daily gate) -----------------------------------
+Write-Host "`n[6/7] Library standardization (daily: remux + dedup + Tdarr scan)..." -ForegroundColor Cyan
+$stampFile      = "$StackDir\.standardize-last-run"
 $runStandardize = $true
 if (Test-Path $stampFile) {
-    $lastRun = [datetime](Get-Content $stampFile -ErrorAction SilentlyContinue)
-    if ((Get-Date) - $lastRun -lt [TimeSpan]::FromDays(1)) {
-        Write-Host "  Last run: $($lastRun.ToString('yyyy-MM-dd HH:mm')) -- skipping (runs daily)" -ForegroundColor Gray
-        $runStandardize = $false
-    }
+    try {
+        $lastRun = [datetime](Get-Content $stampFile -ErrorAction SilentlyContinue)
+        if ((Get-Date) - $lastRun -lt [TimeSpan]::FromDays(1)) {
+            Write-Host "  Last run: $($lastRun.ToString('yyyy-MM-dd HH:mm')) -- skipping (runs daily)" -ForegroundColor Gray
+            Write-Log "Standardize skipped (last run $($lastRun.ToString('yyyy-MM-dd HH:mm')))" "INFO"
+            $runStandardize = $false
+        }
+    } catch { <# malformed stamp -- run anyway #> }
 }
 if ($runStandardize) {
     try {
@@ -159,8 +200,8 @@ if ($runStandardize) {
     }
 }
 
-# -- 6. Firewall check (admin only) -------------------------------------------
-Write-Host "`n[6/6] Firewall rules..." -ForegroundColor Cyan
+# -- 7. Firewall check (admin only) -------------------------------------------
+Write-Host "`n[7/7] Firewall rules..." -ForegroundColor Cyan
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
     [Security.Principal.WindowsBuiltinRole]::Administrator)
 
@@ -176,7 +217,7 @@ if ($isAdmin) {
     Write-Warn "Not running as Administrator - skipping firewall check (run elevated to include this)"
 }
 
-# -- Summary ------------------------------------------------------------------
+# -- Summary -------------------------------------------------------------------
 Write-Host ""
 Write-Host "==========================================" -ForegroundColor Cyan
 if ($Issues.Count -eq 0 -and $Fixes.Count -eq 0) {
@@ -190,3 +231,6 @@ if ($Issues.Count -eq 0 -and $Fixes.Count -eq 0) {
     $Issues | ForEach-Object { Write-Host "  ! $_" -ForegroundColor Red }
 }
 Write-Host "==========================================" -ForegroundColor Cyan
+
+$endStatus = if ($Issues.Count -eq 0) { "OK" } else { "ISSUES: $($Issues -join '; ')" }
+Write-Log "===== END ($($Fixes.Count) fixes, $($Issues.Count) issues) -- $endStatus =====" "INFO"
