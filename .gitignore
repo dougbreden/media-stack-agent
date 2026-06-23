@@ -18,6 +18,18 @@ library-report-cache.json
 # Diagnostic / temp scripts (prefixed _ by convention)
 scripts/_*
 
+# Runtime state (machine-specific, not source)
+.standardize-last-run
+logs/
+.claude/scheduled_tasks.lock
+
+# Unused scaffolding files
+package.json
+package-lock.json
+
+# Stray path-mangled temp file (Windows Temp path written with unicode colon)
+C*Temp*.json
+
 # Windows
 Thumbs.db
 desktop.ini
