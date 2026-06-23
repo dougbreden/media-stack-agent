@@ -57,7 +57,7 @@ with no duplicate audio streams. Surround tracks alongside AAC are correct and e
 | Tool | What it does | Frequency |
 |---|---|---|
 | **Tdarr** | Encodes HEVC/AV1 → H264; adds AAC if missing | Continuous — picks up every new import |
-| **check-stack.ps1** | Calls standardize-library.ps1 | On every boot (once tasks are registered) |
+| **maintain-stack.ps1** | Disk check, containers, VPN, qBittorrent, downloads, standardize, firewall | On every boot (MediaStack-Startup task) |
 | **standardize-library.ps1** | Runs dedup + remux + Tdarr scan | Daily (gated by `.standardize-last-run` stamp) |
 
 ### Manual (on demand)
