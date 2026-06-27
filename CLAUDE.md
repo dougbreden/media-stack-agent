@@ -1,6 +1,6 @@
 # CLAUDE.md — Self-Hosted Media Stack
 
-This is a fully automated self-hosted media pipeline at `M:\Media` running 13 Docker containers on Windows with Docker Desktop (WSL2 backend). See `RUNBOOK.md` for the full human-readable runbook, `LOG.md` for operational history, and `USAGE.md` for end-user instructions. This file is for Claude Code context.
+This is a fully automated self-hosted media pipeline at `M:\Media` running 13 Docker containers on Windows with Docker Desktop (WSL2 backend). See `docs/RUNBOOK.md` for the full human-readable runbook, `docs/LOG.md` for operational history, and `docs/USAGE.md` for end-user instructions. This file is for Claude Code context.
 
 **User workflow:** Request in Jellyseerr → Sonarr/Radarr search → qBittorrent downloads (through Mullvad VPN) → imported and organised → appears in Jellyfin.
 
@@ -13,9 +13,9 @@ This is a fully automated self-hosted media pipeline at `M:\Media` running 13 Do
 | `M:\Media\docker-compose.yml` | All 13 container definitions — uses ${VARIABLE} references for secrets |
 | `M:\Media\.env` | Secrets: WireGuard key + IP, Radarr + Sonarr API keys — never commit |
 | `M:\Media\api-keys.md` | API keys for all services |
-| `M:\Media\RUNBOOK.md` | Full human runbook: setup steps, known issues, reproduction guide |
-| `M:\Media\LOG.md` | Chronological operations log: every fix and config decision |
-| `M:\Media\USAGE.md` | End-user guide: how to request content, client apps, accounts |
+| `M:\Media\docs\RUNBOOK.md` | Full human runbook: setup steps, known issues, reproduction guide |
+| `M:\Media\docs\LOG.md` | Chronological operations log: every fix and config decision |
+| `M:\Media\docs\USAGE.md` | End-user guide: how to request content, client apps, accounts |
 | `M:\Media\config\qbittorrent\qBittorrent\qBittorrent.conf` | qBittorrent settings (paths, seeding limits) |
 
 ---

@@ -23,7 +23,8 @@ scripts/config.ps1
 
 # Runtime state (machine-specific, not source)
 .standardize-last-run
-logs/
+logs/*
+!logs/.gitkeep
 .claude/scheduled_tasks.lock
 
 # Unused scaffolding files
