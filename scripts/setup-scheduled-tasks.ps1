@@ -79,6 +79,37 @@ Write-Host "Registered: $StdTaskName" -ForegroundColor Green
 Write-Host "  Trigger : Daily at 03:30 (after Watchtower at 03:00)" -ForegroundColor Gray
 Write-Host "  Script  : $StdScript" -ForegroundColor Gray
 
+# =============================================================================
+# 4. MediaStack-Firewall
+#    On-demand, elevated: re-apply Docker firewall rules without UAC prompt.
+#    Runs as SYSTEM so Start-ScheduledTask from any non-admin process
+#    (including Claude Code) can trigger it without a UAC prompt.
+# =============================================================================
+$FwTaskName = "MediaStack-Firewall"
+$FwScript   = "$ScriptDir\setup-firewall.ps1"
+
+$fwAction    = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NonInteractive -WindowStyle Hidden -File `"$FwScript`""
+$fwSettings  = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 5) -MultipleInstances IgnoreNew
+$fwPrincipal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+
+Unregister-ScheduledTask -TaskName $FwTaskName -Confirm:$false -ErrorAction SilentlyContinue
+Register-ScheduledTask -TaskName $FwTaskName -Action $fwAction -Settings $fwSettings -Principal $fwPrincipal -Force | Out-Null
+
+# Grant Authenticated Users (standard accounts) the right to trigger this task.
+# SYSTEM tasks have a restrictive default DACL that blocks non-admin callers.
+# D:(A;;GRGX;;;AU) = Allow Authenticated Users Generic Read + Execute
+# D:(A;;GA;;;BA)   = Allow Administrators full control
+# D:(A;;GA;;;SY)   = Allow SYSTEM full control
+$scheduler = New-Object -ComObject "Schedule.Service"
+$scheduler.Connect()
+$sddl = "D:(A;;GRGX;;;AU)(A;;GA;;;BA)(A;;GA;;;SY)"
+$scheduler.GetFolder("\").GetTask($FwTaskName).SetSecurityDescriptor($sddl, 0)
+
+Write-Host "Registered: $FwTaskName" -ForegroundColor Green
+Write-Host "  Trigger : On-demand (Start-ScheduledTask from any process)" -ForegroundColor Gray
+Write-Host "  RunLevel: Highest / SYSTEM (no UAC prompt)" -ForegroundColor Gray
+Write-Host "  Script  : $FwScript" -ForegroundColor Gray
+
 Write-Host ""
 Write-Host "All tasks registered. To verify:" -ForegroundColor Yellow
 Write-Host "  Get-ScheduledTask | Where-Object { `$_.TaskName -like 'MediaStack-*' }" -ForegroundColor Gray

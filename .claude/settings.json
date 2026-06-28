@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Start-ScheduledTask *)",
+      "PowerShell(Get-ScheduledTask *)",
+      "PowerShell(Get-ScheduledTaskInfo *)"
+    ]
+  }
+}

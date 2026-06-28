@@ -200,21 +200,26 @@ if ($runStandardize) {
     }
 }
 
-# -- 7. Firewall check (admin only) -------------------------------------------
+# -- 7. Firewall check (via MediaStack-Firewall scheduled task) ---------------
 Write-Host "`n[7/7] Firewall rules..." -ForegroundColor Cyan
-$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
-    [Security.Principal.WindowsBuiltinRole]::Administrator)
-
-if ($isAdmin) {
-    $mediaRules = (Get-NetFirewallRule -DisplayName "Media Stack -*" -ErrorAction SilentlyContinue).Count
-    if ($mediaRules -ge 10) {
-        Write-OK "$mediaRules Media Stack firewall rules present"
+$fwTask = Get-ScheduledTask -TaskName "MediaStack-Firewall" -ErrorAction SilentlyContinue
+if ($fwTask) {
+    Start-ScheduledTask -TaskName "MediaStack-Firewall"
+    $deadline = (Get-Date).AddSeconds(30)
+    while ((Get-ScheduledTask -TaskName "MediaStack-Firewall").State -eq "Running" -and (Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds 2
+    }
+    $fwResult = (Get-ScheduledTaskInfo -TaskName "MediaStack-Firewall").LastTaskResult
+    if ($fwResult -eq 0) {
+        Write-OK "Firewall rules applied"
+        Write-Log "Firewall rules applied via MediaStack-Firewall task" "INFO"
     } else {
-        Write-Fix "Only $mediaRules firewall rules found (expected 10+) - re-applying..."
-        & "$StackDir\scripts\setup-firewall.ps1"
+        Write-Warn "Firewall task exited with code $fwResult"
+        Write-Log "Firewall task exited with code $fwResult" "WARN"
     }
 } else {
-    Write-Warn "Not running as Administrator - skipping firewall check (run elevated to include this)"
+    Write-Warn "MediaStack-Firewall task not registered -- run setup-scheduled-tasks.ps1 as Administrator once to enable automatic firewall repair"
+    Write-Log "Firewall skipped: MediaStack-Firewall task not registered" "WARN"
 }
 
 # -- Summary -------------------------------------------------------------------
