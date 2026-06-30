@@ -256,8 +256,9 @@ try {
 # Repair is handled by maintain-stack.ps1 (triggers MediaStack-Firewall task) -- NOT here.
 Write-Host "`n[5/6] Firewall rules..." -ForegroundColor Cyan
 try {
-    $fwRules   = @(Get-NetFirewallRule -DisplayName "Media Stack -*" -ErrorAction SilentlyContinue)
-    $ruleCount = $fwRules.Count
+    # Get-NetFirewallRule requires elevation on this host; use netsh which runs without it.
+    $netshLines = netsh advfirewall firewall show rule name=all 2>&1
+    $ruleCount  = @($netshLines | Where-Object { $_ -match "^Rule Name:\s+Media Stack " }).Count
     if ($ruleCount -ge 10) {
         $checks["firewall"] = @{ status = "ok"; ruleCount = $ruleCount }
         Write-OK "Firewall: $ruleCount Media Stack rules present"
