@@ -430,4 +430,27 @@ Write-Host "==========================================" -ForegroundColor Cyan
 
 Write-Log "===== END (overall: $overallStatus) =====" "INFO"
 
+# -- Trigger autonomous repair for degraded services ---------------------------
+# heal-invoke.ps1 has its own circuit breaker; calling it every probe cycle is safe.
+# Disk is excluded -- it always requires human intervention and is never self-healable.
+if ($anyDegraded) {
+    $healScript = Join-Path $PSScriptRoot "heal-invoke.ps1"
+    if (Test-Path $healScript) {
+        foreach ($checkName in @($checks.Keys | Where-Object { $checks[$_].status -eq "degraded" -and $_ -ne "disk" })) {
+            $desc = switch ($checkName) {
+                "containers"   { "One or more containers are down" }
+                "vpn"          { "VPN is not connected to Mullvad" }
+                "qbittorrent"  { "qBittorrent health check failed" }
+                "firewall"     { "Firewall rules are missing or incomplete" }
+                "sonarr-queue" { "$($checks[$checkName].stalledCount) stalled downloads detected" }
+                default        { "$checkName check failed" }
+            }
+            Write-Info "Invoking heal-invoke.ps1 for $checkName"
+            & $healScript -Service $checkName -Description $desc
+        }
+    } else {
+        Write-Warn "heal-invoke.ps1 not found at $healScript -- skipping autonomous repair"
+    }
+}
+
 if ($anyDegraded) { exit 1 } else { exit 0 }

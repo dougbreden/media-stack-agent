@@ -20,7 +20,7 @@
 
 .PARAMETER Service
     Which check failed. Must match a key from health-probe.ps1:
-    containers, vpn, qbittorrent, disk, firewall.
+    containers, vpn, qbittorrent, disk, firewall, sonarr-queue.
 
 .PARAMETER Description
     Optional human-readable context forwarded into the Claude prompt.
@@ -315,9 +315,12 @@ switch ($Service) {
     }
     "firewall" {
         try {
-            $rules     = @(Get-NetFirewallRule -DisplayName "Media Stack -*" -ErrorAction SilentlyContinue)
-            $recovered = ($rules.Count -ge 10)
-            Write-Log "Firewall re-check: $($rules.Count) rules found" "INFO"
+            # Use netsh instead of Get-NetFirewallRule -- the latter requires elevation,
+            # which heal-invoke.ps1 does not have (runs as interactive user, RunLevel Limited).
+            $netshLines = netsh advfirewall firewall show rule name=all 2>&1
+            $count      = @($netshLines | Where-Object { $_ -match "^Rule Name:\s+Media Stack " }).Count
+            $recovered  = ($count -ge 10)
+            Write-Log "Firewall re-check: $count rules found" "INFO"
         } catch {
             Write-Warn "Firewall re-check error: $_"
             $recovered = $false
