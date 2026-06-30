@@ -361,4 +361,14 @@ automation log lines in the prompt. This is an autonomous repair session — fol
 - `logs/health.json`, `logs/alert-state.json` — runtime state
 - `api-keys.md`, `.env`, `scripts/config.ps1` — credentials
 
-When writing or updating documentation, use generic descriptions: "a TV series", "a movie", "a long-running show". The technical detail (codec, file size, error message, API response) is valuable and can be kept; the specific title, genre, or content type is not.
+When writing or updating documentation, use generic descriptions: "a movie" or "a show". The technical detail (codec, file size, error message, API response) is valuable and can be kept; the specific title, genre, or content type is not.
+
+---
+
+## Commit Conventions
+
+All commit messages use **Conventional Commits**: `type(scope): imperative description`.
+
+- **Types:** `feat`, `fix`, `docs`, `chore`, `refactor`
+- **Scopes** (optional, from the stack): `vpn`, `tdarr`, `jellyfin`, `jellyseerr`, `firewall`, `scripts`, `health` (agentic substrate), `docs`, `security`
+- Keep the subject imperative and concise; put longer detail in the body.
