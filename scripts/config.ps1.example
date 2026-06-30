@@ -7,3 +7,6 @@ $jellyfinKey   = "<jellyfin-api-key>"
 $jellyseerrKey = "<jellyseerr-api-key>"
 $qbUser        = "admin"
 $qbPassword    = "<qbittorrent-password>"
+
+$NtfyTopic    = ""  # ntfy.sh topic name (acts as auth token). Install ntfy app on phone, subscribe to this topic.
+                    # Leave blank to disable push alerts.

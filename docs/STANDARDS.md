@@ -18,7 +18,7 @@ Run `scripts\standardize-library.ps1` to bring any library into compliance.
 | Resolution | ≤ 1080p | 4K files belong in the Premium library |
 | Audio — required | **AAC stereo, 192k** | Language: English (en). Added by Tdarr if absent |
 | Audio — optional | Any surround track | AC3/DTS/EAC3/TrueHD kept via -map 0; not touched |
-| Audio — Japanese | AAC stereo, 192k | Added for dual-audio content releases (lang=j) |
+| Audio — Japanese | AAC stereo, 192k | Added for dual-audio releases with Japanese track (lang=j) |
 | Subtitles | Passed through | No modification |
 | Duplicate streams | None | Signature: codec+channels+language must be unique |
 
@@ -121,5 +121,5 @@ All other streams (surround audio, subtitles) are preserved via `-map 0`.
   to protect private tracker hardlinks.
 - **MKV is the only container.** Even when a file is already H264+AAC in MP4, it gets
   remuxed to MKV (stream copy, no quality loss) for consistency and subtitle compatibility.
-- **The a movie** (`Journey to Big Water (2002).mp4`) is a permanently corrupt file.
-  It fails every probe and remux attempt. Delete and re-request via Jellyseerr if needed.
+- One file in the library is permanently corrupt (fails every probe and remux attempt).
+  Delete and re-request via Jellyseerr if needed.

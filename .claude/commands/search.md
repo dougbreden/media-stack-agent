@@ -1,4 +1,4 @@
-The user wants to search for specific content. $ARGUMENTS is the movie or TV series name (and optionally a season number, e.g. "a show S1" or "a show").
+The user wants to search for specific content. $ARGUMENTS is the movie or TV series name (and optionally a season number, e.g. "Show Name S1" or "Movie Title").
 
 Steps:
 1. Search Sonarr for the series name: GET http://localhost:8989/api/v3/series?apikey=<sonarr-key>
@@ -13,7 +13,7 @@ Steps:
 
 4. If NOT found in either app (not added yet):
    - Tell the user to add it via Jellyseerr (http://localhost:5055) or directly in Sonarr/Radarr
-   - Note that Nyaa.si is required for content (SubsPlease/Erai-raws only publish there)
+   - Note that Nyaa.si is required for SubsPlease/Erai-raws releases (they only publish there)
 
 5. To investigate why a specific episode has no results, use the interactive release search:
    GET http://localhost:8989/api/v3/release?apikey=<sonarr-key>&episodeId=<id>

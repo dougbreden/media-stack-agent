@@ -5,5 +5,18 @@
       "PowerShell(Get-ScheduledTask *)",
       "PowerShell(Get-ScheduledTaskInfo *)"
     ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NonInteractive -File M:\\Media\\scripts\\hooks\\post-tool-audit.ps1"
+          }
+        ]
+      }
+    ]
   }
 }

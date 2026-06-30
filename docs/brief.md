@@ -10,7 +10,7 @@ A fully automated self-hosted media pipeline running on a single Windows 10 PC. 
 
 The project has evolved from a hand-managed stack into an agentic system: the repo, scripts, and documentation are structured so Claude Code can operate and repair it remotely with minimal human intervention.
 
-**GitHub:** https://github.com/dougbreden/media-stack-agent
+**GitHub:** https://github.com/dougbreden/homelab-agent
 
 ---
 
@@ -171,7 +171,7 @@ Both apps apply identical scoring to all quality profiles:
 | Preferred Groups | +500 | Yameii, HakataRamen, SubsPlease, Erai-raws, Judas, LostYears, Arg0 |
 | Dual Audio | +400 | JP+EN dual audio |
 | Language: English | +300 | English audio track |
-| English Subs | +200 | Subbed content groups |
+| English Subs | +200 | Preferred subtitle release groups |
 | Non-English | -10000 | Blocks French/German/etc. scene releases |
 
 **Non-English regex critical note:**
@@ -281,11 +281,11 @@ Prime directives for any agent operating the stack:
 
 1. **`MediaStack-Firewall` task not yet registered** — `setup-scheduled-tasks.ps1` was updated but the task requires one manual elevated run to register. Until then, `maintain-stack.ps1` step 7 warns and skips.
 
-2. **64 stalled torrents (a show, a show BD, a show)** — These are old HorribleSubs fansub releases with 0 seeds for 135+ hours. These torrents are using outdated individual-episode release formats; the content may be available as season packs on Nyaa under current groups (SubsPlease, Erai-raws). Action: delete stalled individual-episode torrents, let Sonarr re-search as season packs.
+2. **Stalled torrents (older TV series)** — Old releases with 0 seeds for 135+ hours. These torrents are using outdated individual-episode release formats; the content may be available as season packs on Nyaa under current groups (SubsPlease, Erai-raws). Action: delete stalled individual-episode torrents, let Sonarr re-search as season packs.
 
-3. **a movie remux failure** — One MP4 file failing ffprobe and ffmpeg remux (locked/corrupt). Isolated to that one file; stack is otherwise healthy.
+3. **One corrupt MP4 file** — Failing ffprobe and ffmpeg remux permanently. Isolated to that one file; stack is otherwise healthy.
 
-4. **743 missing TV episodes** — Mostly classic content (a show, a show, a show) and classic content (a show, a show) unlikely to be on public indexers. The popular content (a show 2011, a show, a show) should be searchable via season pack commands.
+4. **743 missing TV episodes** — Mostly older content unlikely to be on public indexers. Popular long-running TV series should be searchable via season pack commands.
 
 5. **Jellyfin phone access not confirmed** — The SQLite fix was applied (task rescheduled) but the user hasn't re-tested since the fix was made. The phone-not-loading issue at the time of diagnosis was likely the firewall (maintain-stack couldn't check it without admin). Needs re-test.
 

@@ -6,6 +6,17 @@ This is a fully automated self-hosted media pipeline at `M:\Media` running 13 Do
 
 ---
 
+## Tutor Mode
+
+This project is simultaneously a working homelab and a learning exercise in agentic AI systems.
+When implementing features, explain what you are doing and why in plain terms before or as you do
+it — what Claude Code primitive you are using (skill, hook, agent, worktree, scheduled agent),
+why it fits this problem, and what capability it unlocks. The user is learning by building.
+Keep explanations concise: one short paragraph per concept is enough. Don't re-explain things
+already covered in this session; do explain new primitives the first time they appear.
+
+---
+
 ## Key Files
 
 | File | Purpose |
@@ -78,8 +89,10 @@ Both apps have identical custom formats applied to all quality profiles. `minFor
 
 Non-English regex (applied to release title):
 ```
-(?i)VOSTFR|FRENCH|VFF|VFQ|TRUEFRENCH|GERMAN|DEUTSCH|SPANISH|ESPANOL|ITALIAN|PORTUGUESE|HEBREW|DUTCH|RUSSIAN|TURKISH|ARABIC|POLISH|(?<!dual[\s.]?)\bmulti\b
+(?i)VOSTFR|FRENCH|VFF|VFQ|TRUEFRENCH|GERMAN|DEUTSCH|SPANISH|ESPANOL|ITALIAN|PORTUGUESE|HEBREW|DUTCH|RUSSIAN|TURKISH|ARABIC|POLISH|HUNGARIAN|MAGYAR|CZECH|SLOVAK|ROMANIAN|BULGARIAN|SERBIAN|CROATIAN|SLOVENIAN|UKRAINIAN|GREEK|MACEDONIAN|ALBANIAN|LATVIAN|LITHUANIAN|ESTONIAN|SWEDISH|NORWEGIAN|NORSK|DANISH|FINNISH|KOREAN|CHINESE|MANDARIN|CANTONESE|HINDI|VIETNAMESE|THAI|INDONESIAN|MALAY|(?<!dual[\s.]?)\bmulti\b
 ```
+
+Languages added 2026-06-28: HUNGARIAN/MAGYAR (triggered by a foreign-language release group incident), plus Czech, Slovak, Romanian, Bulgarian, Serbian, Croatian, Slovenian, Ukrainian, Greek, Macedonian, Albanian, Baltic (Latvian/Lithuanian/Estonian), Nordic (Swedish/Norwegian/Norsk/Danish/Finnish), East Asian (Korean/Chinese/Mandarin/Cantonese), South/SE Asian (Hindi/Vietnamese/Thai/Indonesian/Malay).
 
 The `(?<!dual[\s.]?)\bmulti\b` matches any `multi` (case-insensitive under `(?i)`) **except** when directly preceded by `dual` or `dual.` / `dual `. This blocks French/German scene `MULTi` releases (e.g. NanDesuKa) while allowing `Dual Multi` releases (e.g. HakataRamen JP+EN dual audio).
 
@@ -266,7 +279,7 @@ docker compose pull && docker compose up -d   # update all images
 Active: YTS, The Pirate Bay, EZTV, Nyaa.si, TorrentGalaxy (TGx), LimeTorrents
 Disabled: 1337x (FlareSolverr can't bypass its current Cloudflare — re-test periodically)
 
-content specifically requires Nyaa.si — SubsPlease and Erai-raws only publish there.
+Nyaa.si is required for SubsPlease and Erai-raws releases — they only publish there.
 
 ---
 
@@ -293,5 +306,59 @@ content specifically requires Nyaa.si — SubsPlease and Erai-raws only publish 
 | Tdarr encodes with hevc_nvenc instead of h264_nvenc | Worker reads `k.inputsDB` not `k.inputs`; flow plugins only had `inputs` fields, so defaults were used | Ensure every plugin node in the flow JSON has both `inputs` AND `inputsDB` with identical values |
 | Tdarr job fails: "10 bit encode not supported" | h264_nvenc cannot encode 10-bit pixel formats; `-hwaccel cuda` decodes HEVC Main 10 to p010le which h264_nvenc rejects | Set `hardwareDecoding: "false"` in ffmpegCommandSetVideoEncoder plugin, AND add ffmpegCommandCustomArguments plugin with `outputArguments: "-pix_fmt yuv420p"` |
 | Tdarr queue empty after resetting files | Used `scanFindNew` which only processes new/changed files, not files with cleared TranscodeDecisionMaker | Use `scanFresh` mode in the scan-files API — it re-evaluates all files in the library |
-| Tdarr adds AAC to wrong stream on Blu-ray rips with 6+ streams | `-c:2 aac` in ffmpegCommandCustomArguments targets output stream index 2 (hardcoded), which already exists in multi-stream files; the intended new stream gets no explicit codec | Known limitation. File is still playable and has AAC somewhere. For 2-stream files (most TV/content downloads) the current approach is correct. Multi-stream Blu-ray rips are edge cases |
+| Tdarr adds AAC to wrong stream on Blu-ray rips with 6+ streams | `-c:2 aac` in ffmpegCommandCustomArguments targets output stream index 2 (hardcoded), which already exists in multi-stream files; the intended new stream gets no explicit codec | Known limitation. File is still playable and has AAC somewhere. For 2-stream files (most standard downloads) the current approach is correct. Multi-stream Blu-ray rips are edge cases |
 | Tdarr "Transcode error" files not re-queued after flow fix | Errored files stay in error state permanently; only files with TranscodeDecisionMaker="" are picked up by a fresh scan | Use bulk-update-files API to reset errored files to TranscodeDecisionMaker="". The Phase 2 restore script resets all errored files automatically |
+| health-probe reports `sonarr-queue` degraded (>2 items in warning >4h) | Dead torrents (defunct groups like HorribleSubs, or tracker outages) fill queue at 0%, blocking new downloads | `scripts\rescue-downloads.ps1` dry-run first, then `scripts\rescue-downloads.ps1 -Rescue` to remove with blocklist=true and trigger re-search |
+| Video files downloaded but not in Jellyfin (in /data/torrents but not imported) | Non-standard episode naming (S01EP01 vs S01E01), import error, or file landed in wrong folder | `scripts\import-orphans.ps1` to detect Sonarr/Radarr-parseable files; `scripts\import-orphans.ps1 -Import` to auto-import high-confidence matches. Use Sonarr/Radarr UI Manual Import for low-confidence |
+
+---
+
+## Headless Repair Invocation
+
+When invoked by `scripts/heal-invoke.ps1`, Claude receives the current `health.json` and recent
+automation log lines in the prompt. This is an autonomous repair session — follow these rules:
+
+1. **Do NOT run `/health` or `/probe`** — that creates a recursive invocation loop.
+2. **Read the Known Failure Modes table above first** — most failures have a scripted fix.
+3. **Run the matching repair script** from `M:\Media\scripts\` using the PowerShell tool.
+   Common repair scripts:
+   - VPN down → `scripts\fix-vpn.ps1`
+   - Container down → `docker compose up -d <name>` or `scripts\startup-stack.ps1`
+   - qBittorrent lockfile crash loop → `docker exec qbittorrent sh -c "rm -f /config/qBittorrent/lockfile /config/qBittorrent/ipc-socket"` then `docker compose up -d qbittorrent`
+   - Firewall rules missing → `Start-ScheduledTask -TaskName "MediaStack-Firewall"`
+   - **sonarr-queue** (queue rot — stalled downloads >4h in warning state):
+     1. Run `scripts\rescue-downloads.ps1` (dry-run) to identify dead items
+     2. If confirmed dead, run `scripts\rescue-downloads.ps1 -Rescue` to remove + re-search
+     3. Also run `scripts\import-orphans.ps1` to catch any unimported files in `/data/torrents`
+     4. Do NOT ESCALATE for queue rot alone — this is fully autonomous-resolvable
+     5. ESCALATE only if >20 items are stalled (suggests systemic VPN or tracker failure)
+4. **Re-check** whether the service recovered (docker ps, docker inspect, Mullvad ping, etc.).
+5. **Output a 2–3 sentence summary**: what you found, what you ran, whether it worked.
+6. **Output `ESCALATE: <reason>`** on its own line for these situations:
+   - Mullvad account expired (WireGuard handshake sent, no reply)
+   - Disk full or near-full (`disk` service is ALWAYS an escalation — never try to free space autonomously)
+   - Hardware failure (GPU, disk error, container won't start after 2+ attempts)
+   - Any repair requiring a password, web browser, or physical access
+   - You cannot determine the root cause after reading the failure mode table
+7. **Do not attempt repairs not listed in the Known Failure Modes table** without escalating first.
+8. **Never delete torrents** — if qBittorrent needs intervention, Stop/Pause only.
+
+---
+
+## Privacy Rules — Never Commit
+
+**These must never appear in any committed file:**
+
+- Specific movie or TV show titles (reveals library/viewing habits)
+- Real IP addresses (VPN exit IPs, server IPs — use placeholders like `x.x.x.x`)
+- WireGuard key names or account-identifying strings
+- Jellyfin usernames or account names
+- Any content that identifies what media is in the library
+- Content-type references — use generic terms like "a movie" or "a show" instead
+
+**What stays local (gitignored):**
+- `logs/*.log` — automation logs (may reference specific titles from API responses)
+- `logs/health.json`, `logs/alert-state.json` — runtime state
+- `api-keys.md`, `.env`, `scripts/config.ps1` — credentials
+
+When writing or updating documentation, use generic descriptions: "a TV series", "a movie", "a long-running show". The technical detail (codec, file size, error message, API response) is valuable and can be kept; the specific title, genre, or content type is not.

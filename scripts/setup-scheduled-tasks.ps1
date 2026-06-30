@@ -3,13 +3,15 @@
     Register all Windows scheduled tasks for the media stack.
 
 .DESCRIPTION
-    Creates three scheduled tasks. Safe to re-run -- unregisters and re-registers
+    Creates five scheduled tasks. Safe to re-run -- unregisters and re-registers
     each task if it already exists. Must be run as Administrator.
 
     Tasks registered:
       MediaStack-Startup     -- At logon: wait for Docker, docker compose up -d
       MediaStack-VpnReset    -- Daily 02:00: force-recreate Gluetun (pre-Watchtower at 03:00)
       MediaStack-Standardize -- Daily 03:30: remux + dedup + Tdarr scan for new downloads
+      MediaStack-Firewall    -- On-demand: re-apply Docker firewall rules as SYSTEM (no UAC)
+      MediaStack-HealthProbe -- Every 15 min: run health-probe.ps1, write health.json, ntfy alerts
 
 .NOTES
     Replaces: create-startup-task.ps1
@@ -109,6 +111,28 @@ Write-Host "Registered: $FwTaskName" -ForegroundColor Green
 Write-Host "  Trigger : On-demand (Start-ScheduledTask from any process)" -ForegroundColor Gray
 Write-Host "  RunLevel: Highest / SYSTEM (no UAC prompt)" -ForegroundColor Gray
 Write-Host "  Script  : $FwScript" -ForegroundColor Gray
+
+# =============================================================================
+# 5. MediaStack-HealthProbe
+#    Every 15 minutes: run health-probe.ps1, write health.json, send ntfy alerts
+#    Runs as the interactive user so headless `claude` can find its API key.
+# =============================================================================
+$ProbeTaskName = "MediaStack-HealthProbe"
+$ProbeScript   = "$ScriptDir\health-probe.ps1"
+
+# Once trigger + RepetitionInterval = runs every 15 minutes indefinitely
+$probeTrigger   = New-ScheduledTaskTrigger -Once -At (Get-Date).Date `
+                    -RepetitionInterval (New-TimeSpan -Minutes 15) `
+                    -RepetitionDuration (New-TimeSpan -Days 9999)
+$probeAction    = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NonInteractive -WindowStyle Hidden -File `"$ProbeScript`""
+$probeSettings  = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 3) -MultipleInstances IgnoreNew -StartWhenAvailable
+$probePrincipal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
+
+Unregister-ScheduledTask -TaskName $ProbeTaskName -Confirm:$false -ErrorAction SilentlyContinue
+Register-ScheduledTask -TaskName $ProbeTaskName -Action $probeAction -Trigger $probeTrigger -Settings $probeSettings -Principal $probePrincipal -Force | Out-Null
+Write-Host "Registered: $ProbeTaskName" -ForegroundColor Green
+Write-Host "  Trigger : Every 15 minutes (observation + ntfy alerts)" -ForegroundColor Gray
+Write-Host "  Script  : $ProbeScript" -ForegroundColor Gray
 
 Write-Host ""
 Write-Host "All tasks registered. To verify:" -ForegroundColor Yellow

@@ -54,8 +54,8 @@ Via Tailscale (from anywhere, e.g. cellular): replace `<server-ip>` with `<tails
 
 | Account | For |
 |---|---|
-| `admin` / `<password>` | Full access — Jellyfin, Jellyseerr, all admin UIs (see `api-keys.md`) |
-| the mobile account | Jellyfin only — 8 Mbps bitrate cap for mobile viewing |
+| Admin account | Full access — Jellyfin, Jellyseerr, all admin UIs (see `api-keys.md`) |
+| Mobile account | Jellyfin only — 8 Mbps bitrate cap for mobile viewing (see `api-keys.md`) |
 
 ---
 
@@ -63,9 +63,9 @@ Via Tailscale (from anywhere, e.g. cellular): replace `<server-ip>` with `<tails
 
 **Language preferences are automatic:**
 - English audio is preferred (+300 score)
-- Dual audio (English + Japanese) is preferred for content (+400 score)
+- Dual audio (English + Japanese) is preferred (+400 score)
 - French, German, and other non-English-only releases are filtered out
-- content is sourced from Nyaa.si (SubsPlease, Erai-raws, Judas groups preferred)
+- Nyaa.si is required for SubsPlease, Erai-raws, and Judas release groups
 
 **Seeding:** Downloaded torrents continue seeding until they hit a 1:1 ratio, then pause automatically. This is normal — the files are still fully accessible in Jellyfin.
 

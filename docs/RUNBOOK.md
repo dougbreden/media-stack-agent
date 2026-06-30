@@ -15,7 +15,7 @@ Actual passwords and API keys are in `api-keys.md` (gitignored — never commit)
 |---|---|
 | All app web UI username | `admin` |
 | All app web UI password | see `api-keys.md` |
-| WireGuard key name | REDACTED (created 2026-05-06) |
+| WireGuard key name | see `api-keys.md` |
 | WireGuard key + assigned IP | Stored in `docker-compose.yml` under the `gluetun` service |
 | VPN server | Netherlands (Amsterdam) — switched from Singapore due to tracker IP blocking |
 
@@ -362,7 +362,7 @@ In a Tdarr standardisation setup this is counterproductive:
 REMUXes only make sense in a separate 4K library for clients that can direct-play with HDR passthrough and lossless audio passthrough (e.g. Infuse Pro with Apple TV hardware decode, or a Plex setup with TrueHD passthrough to an AV receiver).
 
 ### Sonarr/Radarr quality profiles: classic or SD-only content silently returns zero results
-Quality profiles are a whitelist — any quality not explicitly listed is rejected, regardless of score. Shows or movies with no HD source (e.g. a 1998 content that only had a DVD release) will return 0 grabs from Sonarr/Radarr indefinitely if the profile only lists HD qualities. Symptoms: series is monitored, 0 history events, 0 files — not even a failed grab.
+Quality profiles are a whitelist — any quality not explicitly listed is rejected, regardless of score. Shows or movies with no HD source (e.g. an older title that only had a DVD release) will return 0 grabs from Sonarr/Radarr indefinitely if the profile only lists HD qualities. Symptoms: series is monitored, 0 history events, 0 files — not even a failed grab.
 
 Fix: for SD-only content, either assign it a profile that includes DVD quality (with 1080p cutoff so it upgrades automatically if HD appears), or edit the existing profile to include DVD in the allowed list. The cutoff controls *when Sonarr stops upgrading*, not *what it will grab initially* — DVD in the allowed list with a 1080p cutoff means "grab DVD now, upgrade to 1080p if it ever exists."
 
@@ -712,7 +712,7 @@ First-run: set up authentication → Forms / admin / `<password>`
 - **YTS** — movies, no extra config needed, Test → Save
 - **The Pirate Bay** — general, no extra config needed, Test → Save
 - **EZTV** — TV shows, Cloudflare-protected → add `flaresolverr` tag → Test → Save
-- **Nyaa.si** — content (essential — all SubsPlease/Erai-raws releases originate here), no extra config needed, Test → Save
+- **Nyaa.si** — essential for SubsPlease/Erai-raws releases (they only publish here), no extra config needed, Test → Save
 - **TorrentGalaxy (TGx)** — general, especially strong for TV, no extra config needed, Test → Save
 - **LimeTorrents** — general backup coverage, no extra config needed, Test → Save
 - **1337x** — general, Cloudflare-protected → add `flaresolverr` tag → Test → Save (disable if it fails — FlareSolverr periodically loses against Cloudflare; re-enable after a FlareSolverr update)
@@ -845,7 +845,7 @@ If using the Jellyfin app on iPhone (Settings gear → Max Streaming Bitrate), s
 
 **Set default subtitle mode** (prevents needing to manually toggle subtitles on every video):
 - Dashboard → **Display**
-- Subtitle Mode: **Smart** — subtitles appear automatically only when the audio track is in a non-preferred language (e.g. Japanese content). For English audio content, subtitles stay off.
+- Subtitle Mode: **Smart** — subtitles appear automatically only when the audio track is in a non-preferred language. For English audio content, subtitles stay off.
 - Save
 
 Or set via API:
@@ -1033,7 +1033,7 @@ We set the minimum to **0** in every profile. The Non-English format scores **-1
 |---|---|---|---|---|
 | **Non-English** | 2 | 1 | -10000 | French/German/etc. keywords + standalone `multi` |
 | **Language: English** | 3 | 2 | +300 | Parsed language metadata = English |
-| **English Subs** | 4 | — | +200 | Known English-sub content release groups |
+| **English Subs** | 4 | — | +200 | Known English-subtitle release groups (SubsPlease/Erai-raws/Judas) |
 | **Dual Audio** | 5 | 3 | +400 | JP+EN dual-audio releases |
 | **Preferred Groups** | 6 | 4 | +500 | Known-good trusted release groups |
 
@@ -1145,7 +1145,7 @@ Note: `[\.\s]` inside a character class — the `.` is literal (not wildcard), m
 (?i)SubsPlease|Erai-raws|Judas|Dual.Audio|DualAudio|English.Subbed
 ```
 
-Matches known English-subtitle content release groups. The `.` between words here is the **regex wildcard** (matches any character) — "Dual.Audio" matches "Dual Audio", "Dual-Audio", "DualXAudio", etc. It's slightly imprecise but works fine in practice since the only realistic match is the intended one.
+Matches known English-subtitle release groups. The `.` between words here is the **regex wildcard** (matches any character) — "Dual.Audio" matches "Dual Audio", "Dual-Audio", "DualXAudio", etc. It's slightly imprecise but works fine in practice since the only realistic match is the intended one.
 
 ---
 
@@ -1155,7 +1155,7 @@ Matches known English-subtitle content release groups. The `.` between words her
 (?i)Yameii|HakataRamen|SubsPlease|Erai-raws|Judas|LostYears|Arg0
 ```
 
-These are release groups confirmed to consistently produce clean English content for content:
+These are release groups confirmed to consistently produce clean English-subtitle content:
 
 | Group | Type | Source |
 |---|---|---|
@@ -1240,9 +1240,9 @@ The smallest set that covers everyday content. All public — no account require
 | **YTS** | Movies | Small x265 files, consistent quality, movie-only |
 | **The Pirate Bay** | General | Oldest public tracker, broad but inconsistent quality |
 | **EZTV** | TV shows | Dedicated TV tracker, good episode coverage |
-| **Nyaa.si** | content | Essential for any content — this is where all content releases originate |
+| **Nyaa.si** | Certain content | Essential for SubsPlease/Erai-raws — this is where their releases originate |
 
-Without Nyaa, content requests in Sonarr will fail or grab poor-quality re-uploads from TPB/EZTV. Add it even if you only plan to watch content occasionally.
+Without Nyaa, SubsPlease/Erai-raws content in Sonarr will fail or grab poor-quality re-uploads from TPB/EZTV.
 
 ---
 
