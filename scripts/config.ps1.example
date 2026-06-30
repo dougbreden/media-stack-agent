@@ -10,3 +10,8 @@ $qbPassword    = "<qbittorrent-password>"
 
 $NtfyTopic    = ""  # ntfy.sh topic name (acts as auth token). Install ntfy app on phone, subscribe to this topic.
                     # Leave blank to disable push alerts.
+
+$AnthropicKey = ""  # OPTIONAL. Leave blank to use the logged-in `claude` session auth (~/.claude),
+                    # which is the normal setup. Only set this to force a standalone Anthropic API
+                    # key for headless heal-invoke.ps1 runs (billed to the API account, not the
+                    # subscription). heal-invoke.ps1 works fine with this blank.

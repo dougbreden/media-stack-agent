@@ -108,9 +108,12 @@ $AlertStatePath = "$LogDir\alert-state.json"
 
 function Get-AlertState {
     $raw = Read-JsonFile $AlertStatePath
-    # ConvertFrom-Json returns a PSCustomObject; convert to hashtable for easy mutation
+    # ConvertFrom-Json returns a PSCustomObject; convert to hashtable for easy mutation.
+    # Guard on the type: Read-JsonFile returns an empty hashtable for a missing/unparseable
+    # file, and iterating .PSObject.Properties on a hashtable would enumerate its .NET members
+    # (Keys/Values/Count/IsReadOnly/...) and persist them as bogus "services" in the state file.
     $ht = @{}
-    if ($raw -and $raw.PSObject.Properties) {
+    if ($raw -is [System.Management.Automation.PSCustomObject]) {
         foreach ($prop in $raw.PSObject.Properties) {
             $entry = $prop.Value
             $ht[$prop.Name] = @{
@@ -157,7 +160,10 @@ $checks     = @{}
 # -- Check 1: Containers -------------------------------------------------------
 Write-Host "`n[1/6] Container status..." -ForegroundColor Cyan
 try {
-    $psRaw = docker compose -f $ComposeFile ps --format json 2>&1
+    # -a is required: without it, `docker compose ps` hides stopped/exited containers,
+    # so a crashed container silently drops out of the list and the check reports healthy.
+    # All 13 services are long-running -- any exited container is a real failure.
+    $psRaw = docker compose -f $ComposeFile ps -a --format json 2>&1
     $containers = $psRaw | ForEach-Object {
         try { $_ | ConvertFrom-Json } catch { $null }
     } | Where-Object { $_ -ne $null }
@@ -445,8 +451,17 @@ if ($anyDegraded) {
                 "sonarr-queue" { "$($checks[$checkName].stalledCount) stalled downloads detected" }
                 default        { "$checkName check failed" }
             }
-            Write-Info "Invoking heal-invoke.ps1 for $checkName"
-            & $healScript -Service $checkName -Description $desc
+            # Launch heal detached -- claude can take up to 5 min, but this probe runs
+            # under a 3-min scheduled-task limit. heal-invoke.ps1 has its own circuit
+            # breaker, logging, and ntfy, so the probe fires and forgets.
+            #
+            # Build a single explicitly-quoted argument string. Start-Process -ArgumentList
+            # with an ARRAY does NOT quote elements containing spaces in PS 5.1, so a
+            # multi-word -Description splits into extra positional args and heal-invoke dies
+            # at parameter binding before it can log anything.
+            Write-Info "Launching heal-invoke.ps1 (detached) for $checkName"
+            $healArgs = "-NonInteractive -ExecutionPolicy Bypass -File `"$healScript`" -Service $checkName -Description `"$desc`""
+            Start-Process powershell.exe -WindowStyle Hidden -ArgumentList $healArgs | Out-Null
         }
     } else {
         Write-Warn "heal-invoke.ps1 not found at $healScript -- skipping autonomous repair"

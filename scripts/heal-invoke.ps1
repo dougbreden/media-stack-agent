@@ -115,8 +115,11 @@ $AlertStatePath = "$LogDir\alert-state.json"
 
 function Get-AlertState {
     $raw = Read-JsonFile $AlertStatePath
+    # Guard on the type: Read-JsonFile returns an empty hashtable for a missing/unparseable
+    # file, and iterating .PSObject.Properties on a hashtable would enumerate its .NET members
+    # (Keys/Values/Count/IsReadOnly/...) and persist them as bogus "services" in the state file.
     $ht  = @{}
-    if ($raw -and $raw.PSObject.Properties) {
+    if ($raw -is [System.Management.Automation.PSCustomObject]) {
         foreach ($prop in $raw.PSObject.Properties) {
             $entry = $prop.Value
             $ht[$prop.Name] = @{
@@ -145,11 +148,18 @@ Write-Host "  Service : $Service" -ForegroundColor Cyan
 Write-Host "  $(Get-Date -Format 'yyyy-MM-dd HH:mm')" -ForegroundColor Cyan
 Write-Host "==========================================" -ForegroundColor Cyan
 
-# -- Guard: AnthropicKey required ------------------------------------------------
-if (-not $AnthropicKey) {
-    Write-Warn "AnthropicKey not set in config.ps1 -- cannot invoke Claude. Skipping heal."
-    Write-Log "Skipped: AnthropicKey not configured" "WARN"
+# -- Guard: claude CLI required --------------------------------------------------
+# Auth is NOT gated on an API key. `claude -p` uses the logged-in ~/.claude
+# session credentials by default (subscription auth). $AnthropicKey is an optional
+# override applied later, only when explicitly set in config.ps1.
+if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
+    Write-Warn "claude CLI not found on PATH -- cannot invoke autonomous repair. Skipping heal."
+    Write-Log "Skipped: claude CLI not on PATH" "WARN"
     exit 0
+}
+if (-not $AnthropicKey) {
+    Write-Info "AnthropicKey not set -- using ambient ~/.claude session auth"
+    Write-Log "Using ambient ~/.claude session auth (no API key override)" "INFO"
 }
 
 # -- 1. Circuit breaker ----------------------------------------------------------
@@ -237,13 +247,18 @@ Write-Log "Context built -- health.json length: $($healthJson.Length), log tail 
 Write-Host "`n[3/5] Invoking Claude Code (timeout: 5 min)..." -ForegroundColor Cyan
 Write-Log "Invoking claude for service: $Service" "INFO"
 
-$env:ANTHROPIC_API_KEY = $AnthropicKey
+# Only set the API key env var when explicitly configured. Setting it to an empty
+# string would be inherited by the Start-Job child and break ambient ~/.claude auth.
+if ($AnthropicKey) { $env:ANTHROPIC_API_KEY = $AnthropicKey }
 
 $claudeOutput   = $null
 $claudeExitCode = $null
 
 $job = Start-Job -ScriptBlock {
     param($PromptText, $Dir)
+    # claude.exe emits UTF-8; without this the console decodes its output as the OEM code
+    # page and mangles non-ASCII (em-dashes -> "ΓÇö") in the heal log that /audit reads.
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
     Push-Location $Dir
     $out      = & claude -p $PromptText --allowedTools "Read,Glob,Grep,PowerShell,Bash" --output-format text 2>&1
     $exitCode = $LASTEXITCODE
